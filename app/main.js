@@ -53,6 +53,72 @@ const config = {
 };
 
 // ---------------------------------------------------------------------------
+// Persistent settings.
+//   current  = the values you are editing now (saved on every change)
+//   defaults = what the Reset button restores (updated by a 3 s long-press)
+// ---------------------------------------------------------------------------
+const STORAGE_KEYS = {
+  current: 'uconsole-scene-demo:current:v1',
+  defaults: 'uconsole-scene-demo:defaults:v1',
+};
+
+function cloneConfig(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function readStored(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch (err) {
+    console.warn(`[settings] cannot read ${key}`, err);
+    return null;
+  }
+}
+
+function writeStored(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (err) {
+    console.warn(`[settings] cannot write ${key}`, err);
+  }
+}
+
+function mergeConfig(target, source) {
+  if (!source) return target;
+  for (const section of Object.keys(target)) {
+    const srcSection = source[section];
+    if (!srcSection) continue;
+    for (const key of Object.keys(target[section])) {
+      const srcValue = srcSection[key];
+      if (srcValue === undefined) continue;
+      const targetValue = target[section][key];
+      if (targetValue && typeof targetValue === 'object' && !Array.isArray(targetValue)) {
+        Object.assign(targetValue, srcValue);
+      } else {
+        target[section][key] = srcValue;
+      }
+    }
+  }
+  return target;
+}
+
+const FACTORY_CONFIG = cloneConfig(config);
+let defaults = cloneConfig(FACTORY_CONFIG);
+mergeConfig(defaults, readStored(STORAGE_KEYS.defaults));
+mergeConfig(config, defaults);
+mergeConfig(config, readStored(STORAGE_KEYS.current));
+
+function saveCurrentConfig() {
+  writeStored(STORAGE_KEYS.current, config);
+}
+
+function saveDefaultsFromCurrent() {
+  defaults = cloneConfig(config);
+  writeStored(STORAGE_KEYS.defaults, defaults);
+}
+
+// ---------------------------------------------------------------------------
 // Renderer / scene / orbit camera (Z is up)
 // ---------------------------------------------------------------------------
 const app = document.getElementById('app');
@@ -359,6 +425,7 @@ function applyConfig() {
   document.getElementById('speedValue').textContent = `${c.conveyor.speed.toFixed(2)} m/s`;
   document.getElementById('fovValue').textContent =
     `${c.camera.fovAlong.toFixed(2)} × ${c.camera.fovAcross.toFixed(2)} m`;
+  saveCurrentConfig();
 }
 
 let uiRefs = {};
@@ -696,11 +763,81 @@ function togglePause() {
 
 document.getElementById('btnPause').addEventListener('click', togglePause);
 document.getElementById('btnSpawn').addEventListener('click', () => spawnBox());
-document.getElementById('btnReset').addEventListener('click', () => {
+
+// Reset: short press restores the saved defaults; holding for 3 s makes the
+// current values the new defaults.
+const btnReset = document.getElementById('btnReset');
+const RESET_HOLD_MS = 3000;
+let resetHoldTimer = null;
+let resetHoldTriggered = false;
+let suppressResetClick = false;
+let resetLabelTimer = null;
+
+function stopResetHold() {
+  clearTimeout(resetHoldTimer);
+  resetHoldTimer = null;
+}
+
+function resetHoldVisual(mode) {
+  btnReset.classList.toggle('holding', mode === 'holding');
+  btnReset.classList.toggle('saved', mode === 'saved');
+  btnReset.textContent = mode === 'holding' ? 'Hold 3s…' : mode === 'saved' ? 'Saved ✓' : 'Reset';
+}
+
+function resetToDefaults() {
+  mergeConfig(config, defaults);
+  saveCurrentConfig();
+  applyConfig();
   while (boxes.length) disposeBox(boxes.pop());
   spawnTimer = 0;
   updateScale();
+  rebuildSidebar();
+}
+
+btnReset.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0) return;
+  clearTimeout(resetLabelTimer);
+  stopResetHold();
+  resetHoldTriggered = false;
+  suppressResetClick = false;
+  resetHoldVisual('holding');
+  resetHoldTimer = setTimeout(() => {
+    resetHoldTriggered = true;
+    saveDefaultsFromCurrent();
+    stopResetHold();
+    resetHoldVisual('saved');
+    resetLabelTimer = setTimeout(() => resetHoldVisual('idle'), 1400);
+  }, RESET_HOLD_MS);
 });
+
+btnReset.addEventListener('pointerup', () => {
+  stopResetHold();
+  if (resetHoldTriggered) suppressResetClick = true;
+  else resetHoldVisual('idle');
+});
+
+btnReset.addEventListener('pointerleave', () => {
+  if (!resetHoldTimer) return;
+  stopResetHold();
+  resetHoldVisual('idle');
+});
+
+btnReset.addEventListener('pointercancel', () => {
+  stopResetHold();
+  resetHoldVisual('idle');
+  suppressResetClick = true;
+});
+
+btnReset.addEventListener('contextmenu', (event) => event.preventDefault());
+
+btnReset.addEventListener('click', () => {
+  if (suppressResetClick) {
+    suppressResetClick = false;
+    return;
+  }
+  resetToDefaults();
+});
+
 document.getElementById('btnZoomIn').addEventListener('click', () => zoomBy(0.85));
 document.getElementById('btnZoomOut').addEventListener('click', () => zoomBy(1.15));
 
@@ -723,6 +860,7 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
+applyConfig();
 rebuildSidebar();
 spawnBox();
 boxes[0].mesh.position.y = 1.1;

@@ -29,7 +29,8 @@ chromium --kiosk --window-size=1280,720 http://localhost:8080
 Controls: drag to orbit, `+` / `-` or `PageUp` / `PageDown` to zoom (also
 **Zoom +** / **Zoom −** buttons), `Space` to pause, `S` to spawn. Click any object
 in the 3D view to select and edit it. The vertical **PANEL** tab on the right
-edge opens/closes the sidebar.
+edge opens/closes the sidebar. A short **Reset** restores the saved defaults;
+holding **Reset** for 3 s saves the current values as the new defaults.
 
 ## Coordinate system
 
@@ -94,6 +95,25 @@ The spawner defaults (random size, min/max L/W/H, spawn interval) live in the
 `boxes` object in `app/main.js`; individual boxes are edited by selecting them
 in the 3D view.
 
+## Settings persistence
+
+All editable object parameters — conveyor, camera, scale, sink, `boxes` spawner
+defaults, and labels — are saved in the browser's `localStorage` on every
+change, so they survive a reload:
+
+- `uconsole-scene-demo:current:v1` — the values you are editing now.
+- `uconsole-scene-demo:defaults:v1` — what **Reset** restores.
+
+Individual spawned boxes are transient and are not persisted.
+
+**Reset** (short press) copies the saved defaults into the current values,
+clears the boxes, and re-renders the sidebar. **Hold Reset for 3 s** instead
+copies the current values into the defaults; the button fills yellow while
+held and shows `Saved ✓` when done. Those values then survive future short
+resets and reloads. To go back to the original factory settings, clear both
+localStorage keys (or run `localStorage.clear()` in the browser console) and
+refresh.
+
 ## Weight mapping
 
 Weight is linear in box volume between smallest and largest allowed boxes:
@@ -119,13 +139,16 @@ platform, or `--- kg` when empty.
 
 ## Tuning
 
-Preferred: use the sidebar. Defaults live in the `config` object at the top of
-`app/main.js`. The Docker volume is bind-mounted, so refresh the browser after
-code edits (no rebuild).
+Preferred: use the sidebar. Factory defaults live in the `config` object at the
+top of `app/main.js`; saved current/default values live in localStorage (see
+above). The Docker volume is bind-mounted, so refresh the browser after code
+edits (no rebuild).
 
 ## Git checkpoints
 
 ```
+0b41ffa Add object tree when nothing selected; decouple camera and scale
+1da6012 Switch to Y=transport Z=up; click-to-select sidebar with vertical tab
 0f5ba11 Add hideable per-object sidebar; remove FOV label
 c3b6080 Checkpoint: working conveyor/camera demo before sidebar step
 ```
