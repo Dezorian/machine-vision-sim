@@ -29,7 +29,30 @@ chromium --kiosk --window-size=1280,720 http://localhost:8080
 
 Controls: drag to orbit, `+` / `-` or `PageUp` / `PageDown` to zoom (there are
 also **Zoom +** / **Zoom −** buttons in the HUD — useful on the uConsole because
-it has no scroll wheel), `Space` to pause, `S` to spawn a box.
+it has no scroll wheel), `Space` to pause, `S` to spawn a box. The **Show panel**
+button at the top-right opens the editable sidebar; click **Hide panel** to close it.
+
+## Editable sidebar
+
+The sidebar has one section per object. Every object exposes:
+
+- position `X`, `Y`, `Z`
+- rotation `RX°`, `RY°`, `RZ°` (degrees)
+- size `L`, `W`, `H` (metres; L = X, W = Z, H = Y)
+
+Object-specific fields:
+
+| Object | Extra fields |
+|---|---|
+| `conveyor` | `speed` (m/s) |
+| `camera` | `FOV L`, `FOV W`, `FOV dist` — editing these re-places the scale right after the FOV |
+| `scale` | — |
+| `sink` | — |
+| `boxes` | `random size`, `min L/W/H`, `max L/W/H`, `every s` (spawn interval) |
+| `labels` | `show labels` (show/hide the 3D scale + sink labels) |
+
+Changes apply live. The FOV text sprite was removed; the yellow footprint
+rectangle and cyan frustum remain.
 
 ## Geometry / coordinate system
 
@@ -62,9 +85,9 @@ verticalFov = 2 * atan((0.40 / 2) / 1.0); // ~22.62 deg, across belt
 aspect      = 0.60 / 0.40;                // 1.5
 ```
 
-Camera `up` is set to `(0, 0, -1)` so image-right maps to world +X. If you meant
-the opposite (600 mm across, 400 mm along), swap `fovAlong` and `fovAcross` in
-`app/main.js` — everything else (footprint, scale position, PiP) follows.
+The camera uses Euler rotation `RX = -90°` so its local `-Z` points down world
+`-Y`. If you meant the opposite (600 mm across, 400 mm along), change `FOV L`
+and `FOV W` in the sidebar — the footprint, scale position, and PiP follow.
 
 ### Weight mapping
 
@@ -86,17 +109,23 @@ platform, or `--- kg` when empty.
 - Bottom-right panel: live view from the camera, including the scale label.
 - Green platform + label: weighing scale and current reading.
 - Red translucent bin at the end: sink.
+- There is **no FOV text label** in the 3D view anymore — only the footprint rectangle.
 
 ## Tuning
 
-Edit the `M` object at the top of `app/main.js`:
+Preferred: use the sidebar. All values live in the `config` object at the top of
+`app/main.js` if you want to change defaults in code. The Docker volume is
+bind-mounted, so a browser refresh is enough (no rebuild).
 
-- `speed`, `spawnEvery`
-- `fovAlong`, `fovAcross`, `cameraHeight`
-- `boxMin`, `boxMax`
-- `weightMin`, `weightMax`
+## Git checkpoint
 
-Then refresh the browser (no rebuild needed — the volume is bind-mounted).
+A checkpoint commit was made before this sidebar work:
+
+```
+c3b6080 Checkpoint: working conveyor/camera demo before sidebar step
+```
+
+To roll back: `git checkout c3b6080 -- .` (or `git reset --hard c3b6080`).
 
 ## Next step: Hiroz
 

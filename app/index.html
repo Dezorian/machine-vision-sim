@@ -25,21 +25,58 @@
     #hud .v { color: #e8f4ff; }
     #hud .scale { color: #48e0a0; font-weight: bold; }
     #hud .btns { display: flex; gap: 6px; margin-top: 10px; }
-    #hud button {
+    #hud button, #sidebarToggle {
       flex: 1; cursor: pointer; padding: 6px 4px;
       background: #1c2a36; color: #d7e3ee;
       border: 1px solid #3a5062; border-radius: 6px;
       font: inherit;
     }
-    #hud button:hover { background: #263a4a; }
+    #hud button:hover, #sidebarToggle:hover { background: #263a4a; }
     #hud .hint { margin-top: 8px; color: #6f8292; font-size: 11px; }
+
+    #sidebarToggle {
+      position: absolute; top: 12px; right: 12px; z-index: 10;
+      width: auto; padding: 7px 12px; flex: none;
+      transition: right .18s ease;
+    }
+    body.sidebar-open #sidebarToggle { right: 332px; }
+
+    #sidebar {
+      position: absolute; top: 0; right: 0; bottom: 0; width: 320px;
+      z-index: 5; padding: 52px 12px 16px;
+      background: rgba(10, 15, 20, 0.95);
+      border-left: 1px solid #2a3947;
+      color: #d7e3ee;
+      font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      overflow-y: auto;
+      transition: transform .18s ease;
+    }
+    body:not(.sidebar-open) #sidebar { transform: translateX(100%); }
+    #sidebar .sec {
+      border: 1px solid #2a3947; border-radius: 8px;
+      padding: 8px; margin-bottom: 10px;
+      background: rgba(20, 30, 40, 0.6);
+    }
+    #sidebar .sec h3 { margin: 0 0 8px; font-size: 12px; color: #ffd54a; }
+    #sidebar .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+    #sidebar .grid.two { grid-template-columns: repeat(2, 1fr); }
+    #sidebar label { display: block; color: #8fa3b5; font-size: 10px; }
+    #sidebar input[type=number] {
+      width: 100%; margin-top: 2px; padding: 3px;
+      background: #111a22; border: 1px solid #33475a; border-radius: 4px;
+      color: #e8f4ff; font: 11px ui-monospace, monospace;
+    }
+    #sidebar .check { display: flex; align-items: center; gap: 6px; margin-top: 6px; color: #8fa3b5; font-size: 11px; }
+    #sidebar .check input { accent-color: #48e0a0; }
 
     #pipWrap {
       position: absolute; right: 12px; bottom: 12px;
       padding: 6px; border-radius: 8px;
       background: rgba(10, 15, 20, 0.85);
       border: 1px solid #2a3947;
+      transition: right .18s ease;
     }
+    body.sidebar-open #pipWrap { right: 332px; }
     #pipWrap .pipTitle {
       color: #ffd54a; font: 11px/1.4 ui-monospace, monospace;
       margin-bottom: 4px; text-align: center;
@@ -63,9 +100,8 @@
     <h1>Conveyor / camera demo</h1>
     <div class="row"><span class="k">boxes on line</span><span class="v" id="count">0</span></div>
     <div class="row"><span class="k">scale</span><span class="v scale" id="scaleValue">--- kg</span></div>
-    <div class="row"><span class="k">belt speed</span><span class="v">0.50 m/s</span></div>
-    <div class="row"><span class="k">belt</span><span class="v">4.00 × 0.60 m</span></div>
-    <div class="row"><span class="k">FOV @ belt</span><span class="v">0.60 × 0.40 m</span></div>
+    <div class="row"><span class="k">belt speed</span><span class="v" id="speedValue">0.50 m/s</span></div>
+    <div class="row"><span class="k">FOV @ plane</span><span class="v" id="fovValue">0.60 × 0.40 m</span></div>
     <div class="btns">
       <button id="btnPause">Pause</button>
       <button id="btnSpawn">Spawn</button>
@@ -75,11 +111,14 @@
       <button id="btnZoomIn">Zoom +</button>
       <button id="btnZoomOut">Zoom −</button>
     </div>
-    <div class="hint">drag = orbit · +/- or PgUp/PgDn = zoom · Space = pause · S = spawn</div>
+    <div class="hint">drag = orbit · +/- = zoom · Space = pause · S = spawn</div>
   </div>
 
+  <button id="sidebarToggle">Show panel</button>
+  <aside id="sidebar"></aside>
+
   <div id="pipWrap">
-    <div class="pipTitle">CAM 1 · x=2.0 m · h=1.0 m</div>
+    <div class="pipTitle">CAM 1 · live view</div>
     <canvas id="pip" width="320" height="213"></canvas>
   </div>
 
