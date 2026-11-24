@@ -25,25 +25,36 @@
     #hud .v { color: #e8f4ff; }
     #hud .scale { color: #48e0a0; font-weight: bold; }
     #hud .btns { display: flex; gap: 6px; margin-top: 10px; }
-    #hud button, #sidebarToggle {
+    #hud button {
       flex: 1; cursor: pointer; padding: 6px 4px;
       background: #1c2a36; color: #d7e3ee;
       border: 1px solid #3a5062; border-radius: 6px;
       font: inherit;
     }
-    #hud button:hover, #sidebarToggle:hover { background: #263a4a; }
+    #hud button:hover { background: #263a4a; }
     #hud .hint { margin-top: 8px; color: #6f8292; font-size: 11px; }
 
-    #sidebarToggle {
-      position: absolute; top: 12px; right: 12px; z-index: 10;
-      width: auto; padding: 7px 12px; flex: none;
+    /* Vertical side tab, centred on the right edge. */
+    #sidebarTab {
+      position: absolute; top: 50%; right: 0; z-index: 10;
+      transform: translateY(-50%);
+      writing-mode: vertical-rl;
+      text-orientation: mixed;
+      padding: 16px 7px;
+      background: #1c2a36; color: #ffd54a;
+      border: 1px solid #3a5062; border-right: none;
+      border-radius: 8px 0 0 8px;
+      cursor: pointer;
+      font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      letter-spacing: 2px;
       transition: right .18s ease;
     }
-    body.sidebar-open #sidebarToggle { right: 332px; }
+    #sidebarTab:hover { background: #263a4a; }
+    body.sidebar-open #sidebarTab { right: 320px; }
 
     #sidebar {
       position: absolute; top: 0; right: 0; bottom: 0; width: 320px;
-      z-index: 5; padding: 52px 12px 16px;
+      z-index: 5; padding: 16px 12px;
       background: rgba(10, 15, 20, 0.95);
       border-left: 1px solid #2a3947;
       color: #d7e3ee;
@@ -59,7 +70,6 @@
     }
     #sidebar .sec h3 { margin: 0 0 8px; font-size: 12px; color: #ffd54a; }
     #sidebar .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
-    #sidebar .grid.two { grid-template-columns: repeat(2, 1fr); }
     #sidebar label { display: block; color: #8fa3b5; font-size: 10px; }
     #sidebar input[type=number] {
       width: 100%; margin-top: 2px; padding: 3px;
@@ -68,9 +78,10 @@
     }
     #sidebar .check { display: flex; align-items: center; gap: 6px; margin-top: 6px; color: #8fa3b5; font-size: 11px; }
     #sidebar .check input { accent-color: #48e0a0; }
+    #sidebar .empty { color: #6f8292; font-size: 11px; line-height: 1.6; padding: 8px; }
 
     #pipWrap {
-      position: absolute; right: 12px; bottom: 12px;
+      position: absolute; right: 26px; bottom: 12px;
       padding: 6px; border-radius: 8px;
       background: rgba(10, 15, 20, 0.85);
       border: 1px solid #2a3947;
@@ -111,10 +122,10 @@
       <button id="btnZoomIn">Zoom +</button>
       <button id="btnZoomOut">Zoom −</button>
     </div>
-    <div class="hint">drag = orbit · +/- = zoom · Space = pause · S = spawn</div>
+    <div class="hint">click object = edit · drag = orbit · +/- = zoom · Space = pause · S = spawn</div>
   </div>
 
-  <button id="sidebarToggle">Show panel</button>
+  <button id="sidebarTab">PANEL</button>
   <aside id="sidebar"></aside>
 
   <div id="pipWrap">
