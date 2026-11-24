@@ -233,7 +233,6 @@ const footprint = new THREE.LineLoop(
   new THREE.LineBasicMaterial({ color: 0xffd54a })
 );
 scene.add(footprint);
-let footprintMaxY = 2.3;
 
 // ---------------------------------------------------------------------------
 // Scale + sink + labels
@@ -282,7 +281,6 @@ function updateFootprint() {
     center.clone().addScaledVector(right, -hw).addScaledVector(up, hh),
   ];
   footprint.geometry.setFromPoints(pts);
-  footprintMaxY = Math.max(...pts.map((p) => p.y));
 }
 
 function applyConfig() {
@@ -365,13 +363,6 @@ function applyConfig() {
 
 let uiRefs = {};
 
-function autoPlaceScale() {
-  applyConfig();
-  config.scale.pos.y = footprintMaxY + config.scale.size.l / 2;
-  if (uiRefs['scale.pos.y']) uiRefs['scale.pos.y'].value = config.scale.pos.y;
-  applyConfig();
-}
-
 // ---------------------------------------------------------------------------
 // Sidebar: only the selected object is shown
 // ---------------------------------------------------------------------------
@@ -398,6 +389,7 @@ const fieldDefs = {
 let selectedKey = null;
 let selectedObj = null;
 let boxWeightEl = null;
+let lastTreeCount = -1;
 
 function getPath(obj, path) {
   return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
@@ -475,6 +467,34 @@ function applyBoxConfig(rec, bc) {
   if (boxWeightEl) boxWeightEl.textContent = `weight: ${rec.weight.toFixed(1)} kg`;
 }
 
+function makeTreeItem(label, key, isGroup = false, isChild = false) {
+  const item = document.createElement('div');
+  item.className = 'item' + (isGroup ? ' group' : '') + (isChild ? ' child' : '');
+  item.textContent = label;
+  item.addEventListener('click', () => selectByKey(key));
+  return item;
+}
+
+function selectByKey(key) {
+  selectedKey = key;
+  if (key.startsWith('box:')) {
+    const rec = boxes.find((b) => `box:${b.id}` === key);
+    selectedObj = rec ? rec.mesh : null;
+  } else if (key === 'boxes' || key === 'labels') {
+    selectedObj = null; // pseudo-objects: no 3D outline
+  } else {
+    selectedObj = scene.children.find((obj) => obj.userData.objectKey === key) || null;
+  }
+
+  if (selectedObj) {
+    selectionBox.box.setFromObject(selectedObj);
+    selectionBox.visible = !selectionBox.box.isEmpty();
+  } else {
+    selectionBox.visible = false;
+  }
+  rebuildSidebar();
+}
+
 function rebuildSidebar() {
   const sidebar = document.getElementById('sidebar');
   sidebar.innerHTML = '';
@@ -482,10 +502,16 @@ function rebuildSidebar() {
   boxWeightEl = null;
 
   if (!selectedKey) {
-    const empty = document.createElement('div');
-    empty.className = 'empty';
-    empty.textContent = 'Click an object in the 3D view to edit it.\n\nconveyor · camera · scale · sink · a box · a label';
-    sidebar.appendChild(empty);
+    const tree = document.createElement('div');
+    tree.className = 'tree';
+    ['conveyor', 'camera', 'scale', 'sink'].forEach((key) => {
+      tree.appendChild(makeTreeItem(key, key));
+    });
+    tree.appendChild(makeTreeItem('boxes', 'boxes', true));
+    boxes.forEach((b) => tree.appendChild(makeTreeItem(`box:${b.id}`, `box:${b.id}`, false, true)));
+    tree.appendChild(makeTreeItem('labels', 'labels'));
+    sidebar.appendChild(tree);
+    lastTreeCount = boxes.length;
     return;
   }
 
@@ -507,10 +533,11 @@ function rebuildSidebar() {
     return;
   }
 
-  addSection(sidebar, selectedKey, config[selectedKey], fieldDefs[selectedKey], (full) => {
-    if (selectedKey === 'camera' || full === 'scale.size.l') autoPlaceScale();
-    else applyConfig();
-  });
+  addSection(sidebar, selectedKey, config[selectedKey], fieldDefs[selectedKey], () => applyConfig());
+}
+
+function maybeRefreshTree() {
+  if (!selectedKey && boxes.length !== lastTreeCount) rebuildSidebar();
 }
 
 const sidebarTab = document.getElementById('sidebarTab');
@@ -697,7 +724,6 @@ window.addEventListener('resize', () => {
 });
 
 rebuildSidebar();
-autoPlaceScale();
 spawnBox();
 boxes[0].mesh.position.y = 1.1;
 
@@ -734,6 +760,7 @@ function animate(now) {
     }
 
     updateScale();
+    maybeRefreshTree();
   }
 
   if (selectedObj && selectionBox.visible) {

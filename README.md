@@ -61,15 +61,19 @@ aspect      = fovAcross / fovAlong;                // 0.4 / 0.6
 ```
 
 The camera rotation is identity (`RX=RY=RZ=0`) because its local `-Z` already
-points down world `-Z`. Editing any camera/FOV field automatically re-places the
-scale right after the new FOV footprint.
+points down world `-Z`. The camera and scale are fully decoupled: editing any
+camera/FOV field never moves the scale, and editing the scale never moves the
+camera.
 
 ## Sidebar (selection-based)
 
 The sidebar shows **only the object currently selected**. Click an object in the
 3D viewer (conveyor, camera, scale, sink, a box, or a 3D label) to select it;
 the selected object gets a cyan bounding outline. Click empty space to clear the
-selection.
+selection and show a tree of all objects instead: `conveyor`, `camera`, `scale`,
+`sink`, a `boxes` group with each live `box:<id>` nested under it, and `labels`.
+Click a tree item to select that object. The tree refreshes automatically as
+boxes spawn and despawn.
 
 Every section exposes:
 
