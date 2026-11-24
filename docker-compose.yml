@@ -1,0 +1,9 @@
+services:
+  viewer:
+    image: nginx:1.27-alpine
+    container_name: uconsole-scene-demo
+    ports:
+      - "8080:80"
+    volumes:
+      - ./app:/usr/share/nginx/html:ro
+    restart: unless-stopped
