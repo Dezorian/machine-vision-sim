@@ -145,6 +145,7 @@ fn sanitize_cameras(cfg: &mut SceneConfig) {
     if cfg.cameras.is_empty() {
         cfg.cameras.push(CameraConfig {
             id: 1,
+            name: "CAM 1".to_string(),
             pose: cfg.camera_pose.clone(),
             rot_deg: cfg.camera_rot_deg.clone(),
             size: cfg.camera_size.clone(),
@@ -166,6 +167,9 @@ fn sanitize_cameras(cfg: &mut SceneConfig) {
         used.insert(cam.id);
         next_id = cam.id + 1;
 
+        if cam.name.trim().is_empty() {
+            cam.name = format!("CAM {}", cam.id);
+        }
         if cam.fov_distance <= 0.0 { cam.fov_distance = 1.0; }
         if cam.fov_y_m <= 0.0 { cam.fov_y_m = 0.6; }
         if cam.fov_x_m <= 0.0 { cam.fov_x_m = 0.4; }
@@ -294,6 +298,7 @@ fn make_snapshot(state: &SimState, stamp_sec: f64) -> SceneSnapshot {
 fn default_config(speed: f64, spawn_interval: f64) -> SceneConfig {
     let top = CameraConfig {
         id: 1,
+        name: "TOP".to_string(),
         pose: Vec3 { x: 0.0, y: 2.0, z: 1.0 },
         rot_deg: Vec3::default(),
         size: Vec3 { x: 0.14, y: 0.14, z: 0.08 },
@@ -305,6 +310,7 @@ fn default_config(speed: f64, spawn_interval: f64) -> SceneConfig {
     // sees the sides of boxes as they travel toward the sink.
     let side = CameraConfig {
         id: 2,
+        name: "SIDE".to_string(),
         pose: top.pose.clone(),
         rot_deg: Vec3 { x: 90.0, y: 0.0, z: 0.0 },
         size: top.size.clone(),

@@ -36,15 +36,16 @@ chromium --kiosk --window-size=1280,720 http://localhost:8080
 
 Controls: drag to orbit, `+` / `-` or `PageUp` / `PageDown` to zoom (also
 **Zoom +** / **Zoom −** buttons), `Space` to pause, `S` to spawn. Click any object
-in the 3D view to select and edit it. The vertical **PANEL** tab on the right
+in the 3D view to select and edit it. The vertical **OBJECTS** tab on the right
 edge opens/closes the sidebar. A short **Reset** restores the saved defaults;
 holding **Reset** for 3 s saves the current values as the new defaults.
 
 Cameras live under the **cameras** group in the sidebar tree. Select one to edit
-its pose/FOV, use the dropdown above the PiP view to switch the live view, or
-press **+ CAM** (also available as **+ add camera** in the tree) to add another
-camera. The default pair shares the same pose: CAM 1 looks down, CAM 2 is the
-same point pitched 90° down the belt to see box sides.
+its name, pose, and FOV; the name appears in the tree and PiP dropdown. Use the
+dropdown above the PiP view to switch the live view, or press **+ CAM** (also
+available as **+ add camera** in the tree) to add another camera. The default
+pair shares the same pose: CAM 1 looks down, CAM 2 is the same point pitched 90°
+down the belt to see box sides.
 
 The top-left general panel has a `−` / `+` button to collapse or expand it, plus
 **FOV** and **LABELS** buttons to show/hide the camera FOV overlays and the

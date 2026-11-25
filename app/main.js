@@ -30,9 +30,10 @@ const sizeFromVec = (v) => ({ l: vec(v).y, w: vec(v).x, h: vec(v).z });
 const copySize = (s) => ({ l: s.l, w: s.w, h: s.h });
 const sceneSize = (s) => ({ x: s.w, y: s.l, z: s.h });
 
-function makeCamera(id, pos, rot, fovAlong, fovAcross, size = { l: 0.14, w: 0.14, h: 0.08 }) {
+function makeCamera(id, name, pos, rot, fovAlong, fovAcross, size = { l: 0.14, w: 0.14, h: 0.08 }) {
   return {
     id,
+    name,
     pos: { ...vec(pos) },
     rot: { ...vec(rot) },
     size: copySize(size),
@@ -47,6 +48,8 @@ function cloneCamera(cam) {
 }
 
 function cameraLabel(cam) {
+  const name = typeof cam.name === 'string' ? cam.name.trim() : '';
+  if (name) return `CAM ${cam.id} · ${name}`;
   if (cam.id === 1) return 'CAM 1 · TOP';
   if (cam.id === 2) return 'CAM 2 · SIDE';
   return `CAM ${cam.id}`;
@@ -66,10 +69,10 @@ const config = {
   },
   cameras: [
     // Top view: local -Z points down world -Z.
-    makeCamera(1, { x: 0, y: 2.0, z: 1.0 }, { x: 0, y: 0, z: 0 }, 0.60, 0.40),
+    makeCamera(1, 'TOP', { x: 0, y: 2.0, z: 1.0 }, { x: 0, y: 0, z: 0 }, 0.60, 0.40),
     // Side view: same point, pitched 90 degrees down the belt. FOV Y is now
     // vertical (world Z) and FOV X stays across the belt (world X).
-    makeCamera(2, { x: 0, y: 2.0, z: 1.0 }, { x: 90, y: 0, z: 0 }, 1.60, 0.60),
+    makeCamera(2, 'SIDE', { x: 0, y: 2.0, z: 1.0 }, { x: 90, y: 0, z: 0 }, 1.60, 0.60),
   ],
   scale: {
     pos: { x: 0, y: 2.60, z: 0.01 },
@@ -190,7 +193,7 @@ function saveDefaultsFromCurrent() {
 
 function firstCamera() {
   if (!Array.isArray(config.cameras) || !config.cameras.length) {
-    config.cameras = [makeCamera(1, { x: 0, y: 2, z: 1 }, { x: 0, y: 0, z: 0 }, 0.60, 0.40)];
+    config.cameras = [makeCamera(1, 'TOP', { x: 0, y: 2, z: 1 }, { x: 0, y: 0, z: 0 }, 0.60, 0.40)];
   }
   return config.cameras[0];
 }
@@ -612,6 +615,7 @@ function sceneConfigFromEditor(options = {}) {
     fov_distance: primary.distance,
     cameras: c.cameras.map((cam) => ({
       id: cam.id,
+      name: String(cam.name ?? ''),
       pose: vec(cam.pos),
       rot_deg: vec(cam.rot),
       size: sceneSize(cam.size),
@@ -692,6 +696,7 @@ function setPaused(value) {
 }
 
 function applyCameraConfig(cam, wire) {
+  if (typeof wire.name === 'string') cam.name = wire.name;
   const pos = vec(wire.pose ?? wire.pos ?? cam.pos);
   cam.pos.x = pos.x; cam.pos.y = pos.y; cam.pos.z = pos.z;
   const rot = vec(wire.rot_deg ?? wire.rot ?? cam.rot);
@@ -719,7 +724,7 @@ function applyCamerasFromWire(wireCameras, sc) {
     while (usedIds.has(id)) id += 1;
     usedIds.add(id);
     let cam = existing.get(id);
-    if (!cam) cam = makeCamera(id, wire.pose, wire.rot_deg, 0.60, 0.40);
+    if (!cam) cam = makeCamera(id, `CAM ${id}`, wire.pose, wire.rot_deg, 0.60, 0.40);
     applyCameraConfig(cam, wire);
     existing.delete(id);
     next.push(cam);
@@ -849,7 +854,7 @@ const baseFields = [
   ['size.l', 'L(Y)', 0.01], ['size.w', 'W(X)', 0.01], ['size.h', 'H(Z)', 0.01],
 ];
 
-const cameraFields = [...baseFields,
+const cameraFields = [['name', 'name', 'text'], ...baseFields,
   ['fovAlong', 'FOV Y', 0.01], ['fovAcross', 'FOV X', 0.01], ['distance', 'FOV dist', 0.01]];
 
 const fieldDefs = {
@@ -891,7 +896,21 @@ function addSection(sidebar, sectionKey, target, defs, onChange) {
 
   for (const [path, label, step] of defs) {
     const full = `${sectionKey}.${path}`;
-    if (step === null) {
+    if (step === 'text') {
+      const wrap = document.createElement('label');
+      wrap.className = 'wide';
+      wrap.textContent = label;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = getPath(target, path) ?? '';
+      input.addEventListener('input', () => {
+        setPath(target, path, input.value);
+        onChange(full);
+      });
+      wrap.appendChild(input);
+      grid.appendChild(wrap);
+      uiRefs[full] = input;
+    } else if (step === null) {
       const wrap = document.createElement('label');
       wrap.className = 'check';
       const input = document.createElement('input');
@@ -975,6 +994,7 @@ function addCamera() {
   const nextId = config.cameras.reduce((max, cam) => Math.max(max, Number(cam.id) || 0), 0) + 1;
   const cam = cloneCamera(base);
   cam.id = nextId;
+  cam.name = `CAM ${nextId}`;
   cam.pos = { ...base.pos };
   cam.rot = { ...base.rot };
   cam.size = copySize(base.size);
@@ -1085,7 +1105,8 @@ function maybeRefreshTree() {
 const sidebarTab = document.getElementById('sidebarTab');
 sidebarTab.addEventListener('click', () => {
   const open = document.body.classList.toggle('sidebar-open');
-  sidebarTab.textContent = open ? 'CLOSE' : 'PANEL';
+  sidebarTab.textContent = 'OBJECTS';
+  sidebarTab.setAttribute('aria-expanded', String(open));
 });
 
 // ---------------------------------------------------------------------------

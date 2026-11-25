@@ -54,6 +54,7 @@ impl ZMessage for CameraState {
 #[ros_msg(type_name = "conveyor_demo/msg/CameraConfig")]
 pub struct CameraConfig {
     pub id: u64,
+    pub name: String,
     pub pose: Vec3,
     pub rot_deg: Vec3,
     pub size: Vec3,
