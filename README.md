@@ -57,9 +57,11 @@ line is still in front of the camera. CAM 1 has its trigger off; CAM 2 triggers
 at each box's `middle`.
 
 The PiP **LIVE / TRIGGER** button toggles between the selected camera's live
-view and the latest cropped trigger image. In trigger mode the ↗ button opens
-that JPEG in a new browser tab. The browser polls `GET /label_image/latest` once
-a second and also updates immediately after posting its own crop.
+view and that camera's latest cropped trigger image. Switching the camera
+dropdown in trigger mode switches the image too. The ↗ button opens the
+selected camera's JPEG in a new browser tab. The browser keeps one latest crop
+per camera from its own captures, polls `GET /label_image/latest` once a second,
+and updates immediately after posting its own crop.
 
 The top-left general panel has a `−` / `+` button to collapse or expand it, plus
 **FOV** and **LABELS** buttons to show/hide the camera FOV overlays and all text

@@ -28,8 +28,7 @@ const pipModeButton = document.getElementById('btnPipMode');
 const pipOpenButton = document.getElementById('btnOpenTrigger');
 const setupFileInput = document.getElementById('setupFileInput');
 let pipMode = 'live';
-let latestLabelImage = null;
-let latestLabelImageUrl = '';
+const latestLabelImages = new Map(); // camera id -> { payload, url }
 
 const vec = (v) => ({
   x: Number.isFinite(v?.x) ? v.x : 0,
@@ -1513,26 +1512,39 @@ pipRenderer.setPixelRatio(1);
 pipRenderer.setSize(320, 213, false);
 pipRenderer.outputColorSpace = THREE.SRGBColorSpace;
 
+function selectedTriggerImage() {
+  return latestLabelImages.get(selectedCamera().id) || null;
+}
+
 function pipTitleText() {
+  const camLabel = cameraLabel(selectedCamera());
   if (pipMode === 'trigger') {
-    if (!latestLabelImage) return 'LATEST TRIGGER · no image yet';
-    return `LATEST TRIGGER · box ${latestLabelImage.box_id} · cam ${latestLabelImage.camera_id}`;
+    const entry = selectedTriggerImage();
+    if (!entry) return `LATEST TRIGGER · ${camLabel} · no image yet`;
+    return `LATEST TRIGGER · ${camLabel} · box ${entry.payload.box_id}`;
   }
-  return `${cameraLabel(selectedCamera())} · live view`;
+  return `${camLabel} · live view`;
 }
 
 function refreshPipModeUI() {
+  const entry = pipMode === 'trigger' ? selectedTriggerImage() : null;
+  const url = entry?.url || '';
   document.body.classList.toggle('pip-trigger', pipMode === 'trigger');
-  document.body.classList.toggle('has-trigger-image', !!latestLabelImageUrl);
+  document.body.classList.toggle('has-trigger-image', !!url);
+  if (url && pipTriggerImage.getAttribute('src') !== url) {
+    pipTriggerImage.src = url;
+  } else if (!url && pipTriggerImage.hasAttribute('src')) {
+    pipTriggerImage.removeAttribute('src');
+  }
   if (pipModeButton) {
     pipModeButton.textContent = pipMode === 'live' ? 'LIVE' : 'TRIGGER';
     pipModeButton.title = pipMode === 'live'
-      ? 'Show latest trigger image'
+      ? 'Show latest trigger image for this camera'
       : 'Show live camera view';
   }
   if (pipOpenButton) {
-    pipOpenButton.hidden = pipMode !== 'trigger' || !latestLabelImageUrl;
-    pipOpenButton.disabled = !latestLabelImageUrl;
+    pipOpenButton.hidden = pipMode !== 'trigger' || !url;
+    pipOpenButton.disabled = !url;
   }
   const title = document.getElementById('pipTitle');
   const text = pipTitleText();
@@ -1555,10 +1567,11 @@ function dataUrlForLabelImage(payload) {
 
 function setLatestLabelImage(payload) {
   if (!isPlainObject(payload) || typeof payload.image_b64 !== 'string' || !payload.image_b64) return false;
-  if (latestLabelImage && Number(latestLabelImage.stamp_sec) === Number(payload.stamp_sec)) return false;
-  latestLabelImage = payload;
-  latestLabelImageUrl = dataUrlForLabelImage(payload);
-  pipTriggerImage.src = latestLabelImageUrl;
+  const cameraId = Number(payload.camera_id);
+  if (!Number.isFinite(cameraId)) return false;
+  const previous = latestLabelImages.get(cameraId);
+  if (previous && Number(previous.payload.stamp_sec) === Number(payload.stamp_sec)) return false;
+  latestLabelImages.set(cameraId, { payload, url: dataUrlForLabelImage(payload) });
   refreshPipModeUI();
   return true;
 }
@@ -1717,7 +1730,8 @@ pipModeButton.addEventListener('click', () => {
   setPipMode(pipMode === 'live' ? 'trigger' : 'live');
 });
 pipOpenButton.addEventListener('click', () => {
-  if (latestLabelImageUrl) window.open(latestLabelImageUrl, '_blank', 'noopener');
+  const entry = pipMode === 'trigger' ? selectedTriggerImage() : null;
+  if (entry) window.open(entry.url, '_blank', 'noopener');
 });
 
 // ---------------------------------------------------------------------------
