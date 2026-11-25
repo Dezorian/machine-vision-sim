@@ -1,0 +1,11 @@
+[package]
+name = "hiroz-conveyor"
+version = "0.1.0"
+edition = "2024"
+description = "Hiroz/Zenoh conveyor simulation for the uConsole scene demo"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive", "env"] }
+hiroz = "0.2.1"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

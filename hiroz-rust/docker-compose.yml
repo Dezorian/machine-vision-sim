@@ -1,0 +1,18 @@
+services:
+  zenoh:
+    image: eclipse/zenoh:latest
+    container_name: uconsole-hiroz-zenoh
+    ports:
+      - "7447:7447"
+      - "8000:8000"
+    restart: unless-stopped
+
+  app:
+    build: .
+    profiles: ["tools"]
+    container_name: uconsole-hiroz-app
+    depends_on:
+      - zenoh
+    environment:
+      ZENOH_ROUTER: tcp/zenoh:7447
+    restart: unless-stopped

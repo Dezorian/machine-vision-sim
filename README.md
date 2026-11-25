@@ -155,13 +155,18 @@ c3b6080 Checkpoint: working conveyor/camera demo before sidebar step
 
 Roll back with `git reset --hard <hash>`.
 
-## Next step: Hiroz
+## Hiroz / Rust setup
 
-To move the simulation out of the browser:
+The first Rust step lives in [`hiroz-rust/`](hiroz-rust/README.md). It runs in
+Docker on the CM4 and publishes a `SceneSnapshot` (conveyor speed, camera state,
+live boxes, scale reading) on `/conveyor/scene` through a Zenoh router. See that
+README for build/run commands.
 
-1. Rust binary using `hiroz` publishes `objects`, `camera_info`, and `image`
-   messages to a Zenoh router.
-2. A tiny Zenoh → WebSocket bridge forwards those to the page.
-3. `main.js` consumes the stream instead of running `spawnBox()` locally.
+Next steps:
+
+1. Add a Zenoh → WebSocket bridge that forwards `SceneSnapshot` to the page.
+2. Change `app/main.js` to consume that stream instead of running `spawnBox()`
+   locally.
+3. Optionally publish `sensor_msgs/Image` / `CameraInfo` for the PiP camera view.
 
 The Three.js rendering, selection, sidebar, footprint, and PiP view stay the same.
