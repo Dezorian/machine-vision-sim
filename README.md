@@ -55,10 +55,19 @@ the tree) to add another camera. The default pair shares the same pose: CAM 1
 looks down, CAM 2 is the same point pitched 90° down the belt to see box sides.
 CAM 1 has its trigger off; CAM 2 triggers at each box's `middle`.
 
+The PiP **LIVE / TRIGGER** button toggles between the selected camera's live
+view and the latest cropped trigger image. In trigger mode the ↗ button opens
+that JPEG in a new browser tab. The browser polls `GET /label_image/latest` once
+a second and also updates immediately after posting its own crop.
+
 The top-left general panel has a `−` / `+` button to collapse or expand it, plus
 **FOV** and **LABELS** buttons to show/hide the camera FOV overlays and all text
 labels (scale, sink, and box shipping labels). Both visibility settings are
-viewer-only and persist in localStorage.
+viewer-only and persist in localStorage. A short **Reset** restores all saved
+defaults, including any extra cameras; holding **Reset** for 3 s saves the full
+current setup as the new defaults. **Save Setup** exports the whole editor
+configuration (cameras included) to a JSON file, and **Load Setup** imports it
+again.
 
 The HUD shows the active `source`: `sim` (default, via the bridge on port 8765),
 `local` (`?source=local`), or `sim offline`.
@@ -201,9 +210,15 @@ Individual spawned boxes are transient and are not persisted.
 clears the boxes, and re-renders the sidebar. **Hold Reset for 3 s** instead
 copies the current values into the defaults; the button fills yellow while
 held and shows `Saved ✓` when done. Those values then survive future short
-resets and reloads. To go back to the original factory settings, clear both
-localStorage keys (or run `localStorage.clear()` in the browser console) and
-refresh.
+resets and reloads. Arrays such as the camera list are stored in full, so
+cameras added with **+ CAM** are included. To go back to the original factory
+settings, clear both localStorage keys (or run `localStorage.clear()` in the
+browser console) and refresh.
+
+**Save Setup** writes the same editor configuration to a portable JSON file
+with a `config` object and `active_camera_id`. **Load Setup** restores that
+file as the current setup, saves it to `localStorage`, clears transient boxes,
+and publishes it to the sim. Missing fields fall back to factory defaults.
 
 ## Weight mapping
 
@@ -239,6 +254,8 @@ edits (no rebuild).
 ## Git checkpoints
 
 ```
+4697c13 Checkpoint before PiP trigger view, default camera persistence, and setup JSON
+3de836a Add box labels, focus-gated zoom, and OCR trigger scaffold
 ad1bf31 Checkpoint before zoom gating, box labels, and OCR prep
 0b41ffa Add object tree when nothing selected; decouple camera and scale
 1da6012 Switch to Y=transport Z=up; click-to-select sidebar with vertical tab

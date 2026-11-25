@@ -127,10 +127,29 @@
       border: 1px solid #3a5062; border-radius: 4px;
       font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }
-    #pipWrap select { flex: 1; }
+    #pipWrap select { flex: 1; min-width: 80px; }
     #pipWrap .pipControls button { flex: 0 0 62px; cursor: pointer; }
-    #pipWrap .pipControls button:hover { background: #263a4a; }
+    #pipWrap .pipControls button.iconBtn { flex: 0 0 28px; font-size: 13px; }
+    #pipWrap .pipControls button:disabled { opacity: .45; cursor: default; }
+    #pipWrap .pipControls button:hover:not(:disabled) { background: #263a4a; }
+    #pipView { position: relative; width: 320px; height: 213px; }
     #pip { display: block; width: 320px; height: 213px; border: 1px solid #3a5062; border-radius: 4px; }
+    #pipTriggerImage, #pipTriggerEmpty {
+      position: absolute; inset: 0; display: none;
+      width: 320px; height: 213px;
+      border: 1px solid #3a5062; border-radius: 4px;
+      box-sizing: border-box;
+    }
+    #pipTriggerImage { object-fit: contain; background: #05080b; }
+    #pipTriggerEmpty {
+      align-items: center; justify-content: center;
+      background: #05080b; color: #6f8292;
+      font: 11px ui-monospace, monospace;
+    }
+    body.pip-trigger #pip { display: none; }
+    body.pip-trigger #pipTriggerEmpty { display: flex; }
+    body.pip-trigger.has-trigger-image #pipTriggerImage { display: block; }
+    body.pip-trigger.has-trigger-image #pipTriggerEmpty { display: none; }
   </style>
 
   <script type="importmap">
@@ -169,6 +188,11 @@
         <button id="btnToggleFov" type="button">FOV: ON</button>
         <button id="btnToggleLabels" type="button">LABELS: ON</button>
       </div>
+      <div class="btns">
+        <button id="btnSaveSetup" type="button">Save Setup</button>
+        <button id="btnLoadSetup" type="button">Load Setup</button>
+      </div>
+      <input id="setupFileInput" type="file" accept="application/json,.json" hidden>
       <div class="hint">click viewer = focus · click object = edit · drag = orbit · +/- = zoom (viewer only) · Space = pause · S = spawn · hold Reset 3s = save defaults</div>
     </div>
   </div>
@@ -181,8 +205,14 @@
     <div class="pipControls">
       <select id="pipCamera" aria-label="PiP camera"></select>
       <button id="btnAddCamera" type="button">+ CAM</button>
+      <button id="btnPipMode" type="button" title="Toggle between live camera and latest trigger image">LIVE</button>
+      <button id="btnOpenTrigger" class="iconBtn" type="button" title="Open latest trigger image in new tab" aria-label="Open latest trigger image in new tab" hidden>↗</button>
     </div>
-    <canvas id="pip" width="320" height="213"></canvas>
+    <div id="pipView">
+      <canvas id="pip" width="320" height="213"></canvas>
+      <img id="pipTriggerImage" alt="Latest trigger crop">
+      <div id="pipTriggerEmpty">No trigger image yet</div>
+    </div>
   </div>
 
   <script type="module" src="./main.js"></script>

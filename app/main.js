@@ -21,6 +21,16 @@ let lastBeltStamp = null;
 let configRetryTimer = null;
 let lastConfigBody = null;
 
+const pipWrap = document.getElementById('pipWrap');
+const pipCanvas = document.getElementById('pip');
+const pipTriggerImage = document.getElementById('pipTriggerImage');
+const pipModeButton = document.getElementById('btnPipMode');
+const pipOpenButton = document.getElementById('btnOpenTrigger');
+const setupFileInput = document.getElementById('setupFileInput');
+let pipMode = 'live';
+let latestLabelImage = null;
+let latestLabelImageUrl = '';
+
 const vec = (v) => ({
   x: Number.isFinite(v?.x) ? v.x : 0,
   y: Number.isFinite(v?.y) ? v.y : 0,
@@ -140,24 +150,36 @@ function writeStored(key, value) {
   }
 }
 
+function isPlainObject(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+// Merge every saved key, including extra arrays such as added cameras. Arrays
+// are replaced wholesale so restoring defaults cannot leave stale entries.
 function mergeConfig(target, source) {
-  if (!source) return target;
-  for (const section of Object.keys(target)) {
-    const srcSection = source[section];
-    if (!srcSection) continue;
-    for (const key of Object.keys(target[section])) {
-      const srcValue = srcSection[key];
-      if (srcValue === undefined) continue;
-      const targetValue = target[section][key];
-      if (Array.isArray(srcValue)) {
-        target[section][key] = cloneConfig(srcValue);
-      } else if (targetValue && typeof targetValue === 'object') {
-        Object.assign(targetValue, srcValue);
-      } else {
-        target[section][key] = srcValue;
-      }
+  if (!isPlainObject(source)) return target;
+  for (const [key, srcValue] of Object.entries(source)) {
+    if (srcValue === undefined) continue;
+    const targetValue = target[key];
+    if (Array.isArray(srcValue)) {
+      target[key] = cloneConfig(srcValue);
+    } else if (isPlainObject(srcValue) && isPlainObject(targetValue)) {
+      mergeConfig(targetValue, srcValue);
+    } else if (isPlainObject(srcValue)) {
+      target[key] = cloneConfig(srcValue);
+    } else {
+      target[key] = srcValue;
     }
   }
+  return target;
+}
+
+// Start from shipped values, then overlay a saved setup. Removing keys from a
+// loaded file naturally falls back to factory defaults.
+function replaceConfig(target, source) {
+  for (const key of Object.keys(target)) delete target[key];
+  mergeConfig(target, FACTORY_CONFIG);
+  mergeConfig(target, source);
   return target;
 }
 
@@ -230,9 +252,7 @@ function refreshCameraControls(force = false) {
   const select = document.getElementById('pipCamera');
   if (!select) return;
   const cam = selectedCamera();
-  const title = document.getElementById('pipTitle');
-  const titleText = `${cameraLabel(cam)} · live view`;
-  if (title && title.textContent !== titleText) title.textContent = titleText;
+  refreshPipModeUI();
 
   const signature = config.cameras.map((entry) => `${entry.id}:${cameraLabel(entry)}`).join(',');
   if (force || signature !== cameraControlSignature) {
@@ -1465,7 +1485,6 @@ renderer.domElement.addEventListener('pointerup', (event) => {
 // ---------------------------------------------------------------------------
 // PiP camera view + cropped OCR trigger frames
 // ---------------------------------------------------------------------------
-const pipCanvas = document.getElementById('pip');
 // preserveDrawingBuffer is required so a trigger crop can be read back.
 const pipRenderer = new THREE.WebGLRenderer({
   canvas: pipCanvas,
@@ -1475,6 +1494,67 @@ const pipRenderer = new THREE.WebGLRenderer({
 pipRenderer.setPixelRatio(1);
 pipRenderer.setSize(320, 213, false);
 pipRenderer.outputColorSpace = THREE.SRGBColorSpace;
+
+function pipTitleText() {
+  if (pipMode === 'trigger') {
+    if (!latestLabelImage) return 'LATEST TRIGGER · no image yet';
+    return `LATEST TRIGGER · box ${latestLabelImage.box_id} · cam ${latestLabelImage.camera_id}`;
+  }
+  return `${cameraLabel(selectedCamera())} · live view`;
+}
+
+function refreshPipModeUI() {
+  document.body.classList.toggle('pip-trigger', pipMode === 'trigger');
+  document.body.classList.toggle('has-trigger-image', !!latestLabelImageUrl);
+  if (pipModeButton) {
+    pipModeButton.textContent = pipMode === 'live' ? 'LIVE' : 'TRIGGER';
+    pipModeButton.title = pipMode === 'live'
+      ? 'Show latest trigger image'
+      : 'Show live camera view';
+  }
+  if (pipOpenButton) {
+    pipOpenButton.hidden = pipMode !== 'trigger' || !latestLabelImageUrl;
+    pipOpenButton.disabled = !latestLabelImageUrl;
+  }
+  const title = document.getElementById('pipTitle');
+  const text = pipTitleText();
+  if (title && title.textContent !== text) title.textContent = text;
+}
+
+function setPipMode(mode) {
+  pipMode = mode === 'trigger' ? 'trigger' : 'live';
+  refreshPipModeUI();
+  if (pipMode === 'live') renderPip();
+}
+
+function dataUrlForLabelImage(payload) {
+  const encoding = String(payload.image_encoding || 'jpeg').toLowerCase();
+  const mime = encoding === 'png' ? 'image/png'
+    : (encoding === 'jpeg' || encoding === 'jpg') ? 'image/jpeg'
+      : `image/${encoding}`;
+  return `data:${mime};base64,${payload.image_b64}`;
+}
+
+function setLatestLabelImage(payload) {
+  if (!isPlainObject(payload) || typeof payload.image_b64 !== 'string' || !payload.image_b64) return false;
+  if (latestLabelImage && Number(latestLabelImage.stamp_sec) === Number(payload.stamp_sec)) return false;
+  latestLabelImage = payload;
+  latestLabelImageUrl = dataUrlForLabelImage(payload);
+  pipTriggerImage.src = latestLabelImageUrl;
+  refreshPipModeUI();
+  return true;
+}
+
+async function pollLatestLabelImage() {
+  if (sourceMode !== 'zenoh') return;
+  try {
+    const response = await fetch(`${bridgeBase}/label_image/latest`, { cache: 'no-store' });
+    if (!response.ok) return;
+    setLatestLabelImage(await response.json());
+  } catch (err) {
+    // The bridge may be offline; the next poll will try again.
+  }
+}
 
 const cropCanvas = document.createElement('canvas');
 const cropCtx = cropCanvas.getContext('2d');
@@ -1490,6 +1570,7 @@ function renderPipFor(cam) {
 }
 
 function renderPip() {
+  if (pipMode === 'trigger') return;
   renderPipFor(selectedCamera());
 }
 
@@ -1526,13 +1607,16 @@ function projectedBoxSize(rec, cam) {
 
 async function postLabelImage(payload) {
   try {
-    await fetch(`${bridgeBase}/label_image`, {
+    const response = await fetch(`${bridgeBase}/label_image`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
     });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return true;
   } catch (err) {
     console.warn('[ocr] cannot post label image', err);
+    return false;
   }
 }
 
@@ -1570,9 +1654,9 @@ async function captureTrigger(cam, rec, triggerY) {
       image_b64: imageB64,
     };
   } finally {
-    renderPipFor(viewingCam);
+    if (pipMode === 'live') renderPipFor(viewingCam);
   }
-  if (payload) await postLabelImage(payload);
+  if (payload && await postLabelImage(payload)) setLatestLabelImage(payload);
 }
 
 function boxTriggerY(rec, anchor, offset) {
@@ -1610,6 +1694,12 @@ document.getElementById('pipCamera').addEventListener('change', (event) => {
   applyConfig();
 });
 document.getElementById('btnAddCamera').addEventListener('click', addCamera);
+pipModeButton.addEventListener('click', () => {
+  setPipMode(pipMode === 'live' ? 'trigger' : 'live');
+});
+pipOpenButton.addEventListener('click', () => {
+  if (latestLabelImageUrl) window.open(latestLabelImageUrl, '_blank', 'noopener');
+});
 
 // ---------------------------------------------------------------------------
 // Controls / animation
@@ -1718,6 +1808,83 @@ btnReset.addEventListener('click', () => {
   resetToDefaults();
 });
 
+// ---------------------------------------------------------------------------
+// External setup JSON: save/load the whole editor config, including cameras.
+// ---------------------------------------------------------------------------
+function flashButton(button, label) {
+  if (!button) return;
+  if (!button.dataset.originalLabel) button.dataset.originalLabel = button.textContent;
+  button.textContent = label;
+  clearTimeout(button._flashTimer);
+  button._flashTimer = setTimeout(() => {
+    button.textContent = button.dataset.originalLabel;
+  }, 1200);
+}
+
+function saveSetupFile() {
+  const payload = {
+    format: 'uconsole-scene-demo-setup',
+    version: 1,
+    exported_at: new Date().toISOString(),
+    active_camera_id: activeCameraId,
+    config: cloneConfig(config),
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `uconsole-setup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function applyLoadedSetup(parsed) {
+  const source = isPlainObject(parsed?.config) ? parsed.config : parsed;
+  if (!isPlainObject(source) || !Array.isArray(source.cameras) || !isPlainObject(source.conveyor)) {
+    throw new Error('not a uconsole setup file');
+  }
+  replaceConfig(config, source);
+  migrateCameraTriggers(config);
+  const requestedId = Number(parsed?.active_camera_id);
+  activeCameraId = cameraById(requestedId) ? requestedId : firstCamera().id;
+
+  saveCurrentConfig();
+  applyConfig();
+  refreshCameraControls(true);
+  while (boxes.length) disposeBox(boxes.pop());
+  spawnTimer = 0;
+  if (sourceMode === 'local') {
+    updateScale();
+  } else {
+    resetSeq += 1;
+    void publishConfig();
+  }
+  rebuildSidebar();
+}
+
+document.getElementById('btnSaveSetup').addEventListener('click', (event) => {
+  saveSetupFile();
+  flashButton(event.currentTarget, 'Saved ✓');
+});
+
+document.getElementById('btnLoadSetup').addEventListener('click', () => setupFileInput.click());
+
+setupFileInput.addEventListener('change', async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  try {
+    applyLoadedSetup(JSON.parse(await file.text()));
+    flashButton(document.getElementById('btnLoadSetup'), 'Loaded ✓');
+  } catch (err) {
+    console.warn('[setup] cannot load file', err);
+    window.alert(`Could not load setup: ${err.message}`);
+  } finally {
+    setupFileInput.value = '';
+  }
+});
+
 document.getElementById('btnZoomIn').addEventListener('click', () => zoomBy(0.85));
 document.getElementById('btnZoomOut').addEventListener('click', () => zoomBy(1.15));
 
@@ -1800,6 +1967,8 @@ if (sourceMode === 'local') {
   updateScale();
 }
 startSceneStream();
+void pollLatestLabelImage();
+setInterval(pollLatestLabelImage, 1000);
 
 function animate(now) {
   requestAnimationFrame(animate);
