@@ -46,6 +46,11 @@ press **+ CAM** (also available as **+ add camera** in the tree) to add another
 camera. The default pair shares the same pose: CAM 1 looks down, CAM 2 is the
 same point pitched 90° down the belt to see box sides.
 
+The top-left general panel has a `−` / `+` button to collapse or expand it, plus
+**FOV** and **LABELS** buttons to show/hide the camera FOV overlays and the
+scale/sink labels. Both visibility settings are viewer-only and persist in
+localStorage.
+
 The HUD shows the active `source`: `sim` (default, via the bridge on port 8765),
 `local` (`?source=local`), or `sim offline`.
 

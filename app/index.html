@@ -19,7 +19,11 @@
       font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       backdrop-filter: blur(4px);
     }
-    #hud h1 { margin: 0 0 6px; font-size: 14px; color: #64d2ff; }
+    #hud .hudHeader { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    #hud h1 { margin: 0; font-size: 14px; color: #64d2ff; }
+    #hud .collapseBtn { flex: 0 0 24px; padding: 2px 0; line-height: 1; }
+    body.hud-collapsed #hud { width: auto; padding: 8px 10px; }
+    body.hud-collapsed #hudBody { display: none; }
     #hud .row { display: flex; justify-content: space-between; gap: 8px; }
     #hud .k { color: #8fa3b5; }
     #hud .v { color: #e8f4ff; }
@@ -139,22 +143,31 @@
   <div id="app"></div>
 
   <div id="hud">
-    <h1>Conveyor / camera demo</h1>
-    <div class="row"><span class="k">source</span><span class="v" id="sourceValue">sim</span></div>
-    <div class="row"><span class="k">boxes on line</span><span class="v" id="count">0</span></div>
-    <div class="row"><span class="k">scale</span><span class="v scale" id="scaleValue">--- kg</span></div>
-    <div class="row"><span class="k">belt speed</span><span class="v" id="speedValue">0.50 m/s</span></div>
-    <div class="row"><span class="k">FOV @ plane</span><span class="v" id="fovValue">0.60 × 0.40 m</span></div>
-    <div class="btns">
-      <button id="btnPause">Pause</button>
-      <button id="btnSpawn">Spawn</button>
-      <button id="btnReset">Reset</button>
+    <div class="hudHeader">
+      <h1>Conveyor / camera demo</h1>
+      <button id="btnHudCollapse" class="collapseBtn" type="button" title="Collapse panel" aria-expanded="true">−</button>
     </div>
-    <div class="btns">
-      <button id="btnZoomIn">Zoom +</button>
-      <button id="btnZoomOut">Zoom −</button>
+    <div id="hudBody">
+      <div class="row"><span class="k">source</span><span class="v" id="sourceValue">sim</span></div>
+      <div class="row"><span class="k">boxes on line</span><span class="v" id="count">0</span></div>
+      <div class="row"><span class="k">scale</span><span class="v scale" id="scaleValue">--- kg</span></div>
+      <div class="row"><span class="k">belt speed</span><span class="v" id="speedValue">0.50 m/s</span></div>
+      <div class="row"><span class="k">FOV @ plane</span><span class="v" id="fovValue">0.60 × 0.40 m</span></div>
+      <div class="btns">
+        <button id="btnPause">Pause</button>
+        <button id="btnSpawn">Spawn</button>
+        <button id="btnReset">Reset</button>
+      </div>
+      <div class="btns">
+        <button id="btnZoomIn">Zoom +</button>
+        <button id="btnZoomOut">Zoom −</button>
+      </div>
+      <div class="btns">
+        <button id="btnToggleFov" type="button">FOV: ON</button>
+        <button id="btnToggleLabels" type="button">LABELS: ON</button>
+      </div>
+      <div class="hint">click object = edit · drag = orbit · +/- = zoom · Space = pause · S = spawn · hold Reset 3s = save defaults</div>
     </div>
-    <div class="hint">click object = edit · drag = orbit · +/- = zoom · Space = pause · S = spawn · hold Reset 3s = save defaults</div>
   </div>
 
   <button id="sidebarTab">PANEL</button>

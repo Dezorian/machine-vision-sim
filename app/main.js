@@ -96,6 +96,9 @@ const config = {
     size: { l: 0.55, w: 0.14, h: 1 }, // sprite size from l/w
     show: true,
   },
+  fov: {
+    show: true, // viewer-only FOV footprint + camera helpers
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -222,6 +225,26 @@ function refreshCameraControls(force = false) {
     cameraControlSignature = signature;
   }
   if (select.value !== String(cam.id)) select.value = String(cam.id);
+}
+
+let hudCollapsed = false;
+
+function refreshHudControls() {
+  const collapse = document.getElementById('btnHudCollapse');
+  if (collapse) {
+    const symbol = hudCollapsed ? '+' : '−';
+    if (collapse.textContent !== symbol) collapse.textContent = symbol;
+    collapse.title = hudCollapsed ? 'Expand panel' : 'Collapse panel';
+    collapse.setAttribute('aria-expanded', String(!hudCollapsed));
+  }
+
+  const fovBtn = document.getElementById('btnToggleFov');
+  const fovText = `FOV: ${config.fov.show ? 'ON' : 'OFF'}`;
+  if (fovBtn && fovBtn.textContent !== fovText) fovBtn.textContent = fovText;
+
+  const labelBtn = document.getElementById('btnToggleLabels');
+  const labelText = `LABELS: ${config.labels.show ? 'ON' : 'OFF'}`;
+  if (labelBtn && labelBtn.textContent !== labelText) labelBtn.textContent = labelText;
 }
 
 // ---------------------------------------------------------------------------
@@ -527,6 +550,8 @@ function applyConfig() {
   demoCam.far = Math.max(distance * 1.25 + 0.25, c.conveyor.size.l + 1.0);
   demoCam.updateProjectionMatrix();
   demoCam.updateMatrixWorld(true);
+  footprint.visible = c.fov.show;
+  camHelper.visible = c.fov.show;
   camHelper.update();
   updateFootprint();
 
@@ -562,6 +587,7 @@ function applyConfig() {
   document.getElementById('fovValue').textContent =
     `${cam.fovAlong.toFixed(2)} × ${cam.fovAcross.toFixed(2)} m`;
   refreshCameraControls();
+  refreshHudControls();
   maybeRefreshTree();
   // Persistence is handled by the editor/sim commit path, not by every snapshot.
 }
@@ -610,7 +636,6 @@ function sceneConfigFromEditor(options = {}) {
     boxes_max: sceneSize(c.boxes.max),
     spawn_interval: c.boxes.spawnEvery,
 
-    labels_show: !!c.labels.show,
     paused,
     config_seq: configSeq,
     spawn_seq: spawnSeq,
@@ -651,10 +676,13 @@ function publishConfig(options = {}) {
   scheduleConfigRetry(); // retry until the sim echoes this config_seq
 }
 
+const VIEWER_ONLY_PREFIXES = ['labels.', 'fov.'];
+const isViewerOnly = (full) => VIEWER_ONLY_PREFIXES.some((prefix) => full.startsWith(prefix));
+
 function onConfigChanged(full = '') {
   saveCurrentConfig();
-  // Labels are viewer-only (not in SceneConfig), so keep them local.
-  if (sourceMode === 'local' || full.startsWith('labels.')) applyConfig();
+  // Labels and FOV overlays are viewer-only, so keep them local.
+  if (sourceMode === 'local' || isViewerOnly(full)) applyConfig();
   else void publishConfig();
 }
 
@@ -730,7 +758,7 @@ function applySceneConfig(sc) {
   config.boxes.max = sc.boxes_max ? sizeFromVec(sc.boxes_max) : copySize(config.boxes.max);
   config.boxes.spawnEvery = sc.spawn_interval ?? config.boxes.spawnEvery;
 
-  config.labels.show = sc.labels_show ?? config.labels.show;
+  // labels.show and fov.show are viewer-only; snapshots do not overwrite them.
   applyConfig();
 }
 
@@ -1191,9 +1219,10 @@ pipRenderer.outputColorSpace = THREE.SRGBColorSpace;
 
 function renderPip() {
   const hidden = [camHelper, footprint, selectionBox, ...Array.from(cameraRigs.values(), (rig) => rig.group)];
+  const wasVisible = hidden.map((obj) => obj.visible);
   hidden.forEach((obj) => { obj.visible = false; });
   pipRenderer.render(scene, demoCam);
-  hidden.forEach((obj) => { obj.visible = true; });
+  hidden.forEach((obj, i) => { obj.visible = wasVisible[i]; });
 }
 
 document.getElementById('pipCamera').addEventListener('change', (event) => {
@@ -1311,6 +1340,20 @@ btnReset.addEventListener('click', () => {
 
 document.getElementById('btnZoomIn').addEventListener('click', () => zoomBy(0.85));
 document.getElementById('btnZoomOut').addEventListener('click', () => zoomBy(1.15));
+
+document.getElementById('btnHudCollapse').addEventListener('click', () => {
+  hudCollapsed = !hudCollapsed;
+  document.body.classList.toggle('hud-collapsed', hudCollapsed);
+  refreshHudControls();
+});
+document.getElementById('btnToggleFov').addEventListener('click', () => {
+  config.fov.show = !config.fov.show;
+  onConfigChanged('fov.show');
+});
+document.getElementById('btnToggleLabels').addEventListener('click', () => {
+  config.labels.show = !config.labels.show;
+  onConfigChanged('labels.show');
+});
 
 window.addEventListener('keydown', (event) => {
   if (event.code === 'Space') { event.preventDefault(); togglePause(); }
