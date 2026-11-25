@@ -30,7 +30,7 @@ const sizeFromVec = (v) => ({ l: vec(v).y, w: vec(v).x, h: vec(v).z });
 const copySize = (s) => ({ l: s.l, w: s.w, h: s.h });
 const sceneSize = (s) => ({ x: s.w, y: s.l, z: s.h });
 
-function makeCamera(id, name, pos, rot, fovAlong, fovAcross, size = { l: 0.14, w: 0.14, h: 0.08 }) {
+function makeCamera(id, name, pos, rot, fovAlong, fovAcross, size = { l: 0.14, w: 0.14, h: 0.08 }, triggers = {}) {
   return {
     id,
     name,
@@ -40,6 +40,8 @@ function makeCamera(id, name, pos, rot, fovAlong, fovAcross, size = { l: 0.14, w
     fovAlong,
     fovAcross,
     distance: 1.0,
+    trigger_anchor: triggers.anchor ?? 'off',
+    trigger_offset: triggers.offset ?? 0,
   };
 }
 
@@ -69,10 +71,12 @@ const config = {
   },
   cameras: [
     // Top view: local -Z points down world -Z.
-    makeCamera(1, 'TOP', { x: 0, y: 2.0, z: 1.0 }, { x: 0, y: 0, z: 0 }, 0.60, 0.40),
+    makeCamera(1, 'TOP', { x: 0, y: 2.0, z: 1.0 }, { x: 0, y: 0, z: 0 }, 0.60, 0.40,
+      undefined, { anchor: 'off', offset: 0 }),
     // Side view: same point, pitched 90 degrees down the belt. FOV Y is now
     // vertical (world Z) and FOV X stays across the belt (world X).
-    makeCamera(2, 'SIDE', { x: 0, y: 2.0, z: 1.0 }, { x: 90, y: 0, z: 0 }, 1.60, 0.60),
+    makeCamera(2, 'SIDE', { x: 0, y: 2.0, z: 1.0 }, { x: 90, y: 0, z: 0 }, 1.60, 0.60,
+      undefined, { anchor: 'middle', offset: 0 }),
   ],
   scale: {
     pos: { x: 0, y: 2.60, z: 0.01 },
@@ -172,15 +176,29 @@ function migrateLegacyCamera(target, stored) {
   };
 }
 
+// Stored cameras from before trigger settings arrived have no trigger fields.
+// Keep the shipped SIDE camera enabled so crop capture works after an upgrade.
+function migrateCameraTriggers(target) {
+  for (const cam of target.cameras || []) {
+    if (cam.trigger_anchor === undefined) {
+      const isSide = cam.id === 2 || String(cam.name ?? '').trim().toUpperCase() === 'SIDE';
+      cam.trigger_anchor = isSide ? 'middle' : 'off';
+    }
+    if (!Number.isFinite(cam.trigger_offset)) cam.trigger_offset = 0;
+  }
+}
+
 const FACTORY_CONFIG = cloneConfig(config);
 let defaults = cloneConfig(FACTORY_CONFIG);
 const storedDefaults = readStored(STORAGE_KEYS.defaults);
 const storedCurrent = readStored(STORAGE_KEYS.current);
 mergeConfig(defaults, storedDefaults);
 migrateLegacyCamera(defaults, storedDefaults);
+migrateCameraTriggers(defaults);
 mergeConfig(config, defaults);
 mergeConfig(config, storedCurrent);
 migrateLegacyCamera(config, storedCurrent);
+migrateCameraTriggers(config);
 
 function saveCurrentConfig() {
   writeStored(STORAGE_KEYS.current, config);
@@ -260,6 +278,9 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 app.appendChild(renderer.domElement);
+renderer.domElement.tabIndex = 0;
+renderer.domElement.setAttribute('aria-label', '3D viewer');
+renderer.domElement.addEventListener('pointerdown', () => renderer.domElement.focus({ preventScroll: true }));
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0b0f14);
@@ -302,6 +323,7 @@ scene.add(grid);
 // ---------------------------------------------------------------------------
 const unitBox = new THREE.BoxGeometry(1, 1, 1);
 const unitEdges = new THREE.EdgesGeometry(unitBox);
+const unitPlane = new THREE.PlaneGeometry(1, 1);
 const boxEdgeMat = new THREE.LineBasicMaterial({ color: 0x0b0f14 });
 
 function makeBox(size, pos, rot, material, edgeMat = null, parent = scene) {
@@ -362,6 +384,164 @@ function makeLabel(text, opts = {}) {
   sprite.userData.setText = setText;
   setText(text);
   return sprite;
+}
+
+// ---------------------------------------------------------------------------
+// Box shipping labels (data comes from the sim; only the texture is local)
+// ---------------------------------------------------------------------------
+const LABEL_SIDES = [
+  { normal: [1, 0, 0], horizontal: [0, 1, 0] },   // +X
+  { normal: [-1, 0, 0], horizontal: [0, -1, 0] }, // -X
+  { normal: [0, 1, 0], horizontal: [-1, 0, 0] },  // +Y
+  { normal: [0, -1, 0], horizontal: [1, 0, 0] },  // -Y
+];
+
+function seededRng(seed) {
+  let state = (Number(seed) >>> 0) || 0x9e3779b9;
+  return () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 4294967296;
+  };
+}
+
+function makeBoxLabelTexture(data, weight) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 288;
+  const ctx = canvas.getContext('2d');
+  const rng = seededRng((Number(data.seed) >>> 0) ^ ((Number(data.side) + 1) * 0x9e3779b9));
+  const w = canvas.width;
+  const h = canvas.height;
+
+  // Deterministic per-box wear: blur, skew, tilt and faint scuffs.
+  const blur = 0.35 + rng() * 1.55;
+  const skew = (rng() * 2 - 1) * 0.13;
+  const tilt = (rng() * 2 - 1) * 0.035;
+
+  ctx.clearRect(0, 0, w, h);
+  ctx.save();
+  ctx.translate(w / 2, h / 2);
+  ctx.transform(1, tilt, skew, 1, 0, 0);
+  ctx.rotate((rng() * 2 - 1) * 0.015);
+  ctx.translate(-w / 2, -h / 2);
+
+  ctx.fillStyle = '#f7f7f2';
+  roundRect(ctx, 18, 14, w - 36, h - 28, 14);
+  ctx.fill();
+
+  ctx.strokeStyle = '#d2d2c8';
+  ctx.lineWidth = 4;
+  roundRect(ctx, 18, 14, w - 36, h - 28, 14);
+  ctx.stroke();
+
+  // A simple barcode graphic; the numeric value is also printed below it.
+  const barcode = String(data.barcode || '');
+  let x = 38;
+  for (let i = 0; i < barcode.length && x < w - 48; i++) {
+    const digit = Number(barcode[i]) || 0;
+    const barW = 2 + (digit % 4) * 2;
+    ctx.fillStyle = 'rgba(17,19,22,0.86)';
+    ctx.fillRect(x, h - 58, barW, 30);
+    x += barW + 2 + (digit % 3);
+  }
+
+  ctx.filter = `blur(${blur.toFixed(2)}px)`;
+  ctx.fillStyle = '#111316';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.font = 'bold 30px ui-monospace, monospace';
+  ctx.fillText('WEIGHT', 38, 56);
+  ctx.font = 'bold 46px ui-monospace, monospace';
+  ctx.fillText(`${Number(weight).toFixed(1)} kg`, 190, 56);
+
+  ctx.font = 'bold 44px ui-monospace, monospace';
+  ctx.fillText(String(data.country_code || '??'), 38, 118);
+  ctx.font = 'bold 34px ui-monospace, monospace';
+  ctx.fillText(barcode, 38, 166);
+  ctx.font = 'bold 30px ui-monospace, monospace';
+  ctx.fillText(String(data.order_number || ''), 38, 210);
+  ctx.filter = 'none';
+
+  ctx.globalAlpha = 0.08 + rng() * 0.12;
+  ctx.fillStyle = '#ffffff';
+  for (let i = 0; i < 7; i++) {
+    ctx.fillRect(rng() * w, rng() * h, 12 + rng() * 80, 3 + rng() * 9);
+  }
+  ctx.restore();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy?.() ?? 1);
+  return texture;
+}
+
+function makeBoxLabel(data, weight) {
+  const material = new THREE.MeshBasicMaterial({
+    map: makeBoxLabelTexture(data, weight),
+    side: THREE.FrontSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  });
+  const mesh = new THREE.Mesh(unitPlane, material);
+  const side = Math.max(0, Math.min(3, Number(data.side) || 0));
+  const face = LABEL_SIDES[side];
+  const horizontal = new THREE.Vector3(...face.horizontal);
+  const vertical = new THREE.Vector3(0, 0, 1);
+  const normal = new THREE.Vector3(...face.normal);
+  mesh.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(horizontal, vertical, normal));
+  mesh.position.set(normal.x * 0.504, normal.y * 0.504, normal.z * 0.504);
+  mesh.scale.set(0.82, 0.46, 1);
+  mesh.visible = config.labels.show;
+  return mesh;
+}
+
+function boxLabelKey(rec) {
+  const d = rec.labelData;
+  if (!d) return '';
+  return [d.side, d.seed, d.country_code, d.barcode, d.order_number, rec.weight.toFixed(2)].join('|');
+}
+
+function refreshBoxLabel(rec) {
+  if (!rec.labelData) return;
+  const key = boxLabelKey(rec);
+  if (rec.labelKey === key) return;
+  if (rec.labelMesh) {
+    rec.mesh.remove(rec.labelMesh);
+    rec.labelMesh.material.map?.dispose();
+    rec.labelMesh.material.dispose();
+    rec.labelMesh = null;
+  }
+  rec.labelMesh = makeBoxLabel(rec.labelData, rec.weight);
+  rec.mesh.add(rec.labelMesh);
+  rec.labelKey = key;
+}
+
+function setBoxLabelData(rec, data) {
+  rec.labelData = data;
+  refreshBoxLabel(rec);
+}
+
+function labelDataFromWire(sb) {
+  if (!sb || sb.label_side === undefined) return null;
+  return {
+    side: Math.max(0, Math.min(3, Number(sb.label_side) || 0)),
+    seed: Number(sb.label_seed) || 0,
+    country_code: String(sb.country_code ?? '??'),
+    barcode: String(sb.barcode ?? ''),
+    order_number: String(sb.order_number ?? ''),
+  };
+}
+
+function randomLocalLabelData(id) {
+  const countries = ['NL', 'DE', 'US', 'JP', 'GB', 'FR'];
+  return {
+    side: Math.floor(Math.random() * 4),
+    seed: (Math.random() * 0xffffffff) >>> 0,
+    country_code: countries[Math.floor(Math.random() * countries.length)],
+    barcode: String(Math.floor(Math.random() * 1e12)).padStart(12, '0'),
+    order_number: `ORD-${String(id).padStart(6, '0')}`,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -512,6 +692,20 @@ function updateFootprint() {
   footprint.geometry.setFromPoints(pts);
 }
 
+function configureDemoCam(cam) {
+  const distance = Math.max(0.01, cam.distance);
+  const along = Math.max(0.01, cam.fovAlong);
+  const across = Math.max(0.01, cam.fovAcross);
+  demoCam.position.set(cam.pos.x, cam.pos.y, cam.pos.z);
+  demoCam.rotation.set(deg(cam.rot.x), deg(cam.rot.y), deg(cam.rot.z));
+  demoCam.fov = rad(2 * Math.atan((along / 2) / distance));
+  demoCam.aspect = across / along;
+  demoCam.near = 0.02;
+  demoCam.far = Math.max(distance * 1.25 + 0.25, config.conveyor.size.l + 1.0);
+  demoCam.updateProjectionMatrix();
+  demoCam.updateMatrixWorld(true);
+}
+
 function applyConfig() {
   const c = config;
 
@@ -541,18 +735,7 @@ function applyConfig() {
   syncCameraRigs();
   if (!cameraById(activeCameraId)) activeCameraId = firstCamera().id;
   const cam = selectedCamera();
-  const distance = Math.max(0.01, cam.distance);
-  const along = Math.max(0.01, cam.fovAlong);
-  const across = Math.max(0.01, cam.fovAcross);
-
-  demoCam.position.set(cam.pos.x, cam.pos.y, cam.pos.z);
-  demoCam.rotation.set(deg(cam.rot.x), deg(cam.rot.y), deg(cam.rot.z));
-  demoCam.fov = rad(2 * Math.atan((along / 2) / distance));
-  demoCam.aspect = across / along;
-  demoCam.near = 0.02;
-  demoCam.far = Math.max(distance * 1.25 + 0.25, c.conveyor.size.l + 1.0);
-  demoCam.updateProjectionMatrix();
-  demoCam.updateMatrixWorld(true);
+  configureDemoCam(cam);
   footprint.visible = c.fov.show;
   camHelper.visible = c.fov.show;
   camHelper.update();
@@ -585,6 +768,9 @@ function applyConfig() {
   );
   scaleLabel.material.rotation = deg(c.labels.rot.z);
   sinkLabel.material.rotation = deg(c.labels.rot.z);
+  for (const b of boxes) {
+    if (b.labelMesh) b.labelMesh.visible = c.labels.show;
+  }
 
   document.getElementById('speedValue').textContent = `${c.conveyor.speed.toFixed(2)} m/s`;
   document.getElementById('fovValue').textContent =
@@ -622,6 +808,8 @@ function sceneConfigFromEditor(options = {}) {
       fov_y_m: cam.fovAlong,
       fov_x_m: cam.fovAcross,
       fov_distance: cam.distance,
+      trigger_anchor: String(cam.trigger_anchor ?? 'off'),
+      trigger_offset: Number(cam.trigger_offset) || 0,
     })),
 
     scale_pose: vec(c.scale.pos),
@@ -706,6 +894,11 @@ function applyCameraConfig(cam, wire) {
   cam.fovAlong = wire.fov_y_m ?? wire.fovAlong ?? cam.fovAlong;
   cam.fovAcross = wire.fov_x_m ?? wire.fovAcross ?? cam.fovAcross;
   cam.distance = wire.fov_distance ?? wire.distance ?? cam.distance;
+  const anchor = String(wire.trigger_anchor ?? cam.trigger_anchor ?? 'off').trim().toLowerCase();
+  cam.trigger_anchor = ['off', 'middle', 'begin', 'end'].includes(anchor) ? anchor : 'off';
+  cam.trigger_offset = Number.isFinite(wire.trigger_offset)
+    ? wire.trigger_offset
+    : (Number.isFinite(cam.trigger_offset) ? cam.trigger_offset : 0);
 }
 
 // Update camera objects in place so any open sidebar inputs stay bound to them.
@@ -789,7 +982,10 @@ function syncBoxes(simBoxes) {
       });
       const mesh = makeBox(size, pose, rot, material, boxEdgeMat);
       mesh.userData.objectKey = `box:${id}`;
-      rec = { id, mesh, l: size.l, w: size.w, h: size.h, weight: 0, vz: 0 };
+      rec = {
+        id, mesh, l: size.l, w: size.w, h: size.h, weight: 0, vz: 0,
+        labelData: null, labelKey: '', labelMesh: null, triggerPrevY: new Map(),
+      };
       mesh.userData.boxRecord = rec;
       boxes.push(rec);
       nextBoxId = Math.max(nextBoxId, id + 1);
@@ -802,6 +998,7 @@ function syncBoxes(simBoxes) {
     rec.w = size.w;
     rec.h = size.h;
     rec.weight = Number.isFinite(sb.weight_kg) ? sb.weight_kg : weightFor(size.l, size.w, size.h);
+    setBoxLabelData(rec, labelDataFromWire(sb));
     if (boxWeightEl && selectedKey === `box:${id}`) {
       boxWeightEl.textContent = `weight: ${rec.weight.toFixed(1)} kg`;
     }
@@ -855,7 +1052,9 @@ const baseFields = [
 ];
 
 const cameraFields = [['name', 'name', 'text'], ...baseFields,
-  ['fovAlong', 'FOV Y', 0.01], ['fovAcross', 'FOV X', 0.01], ['distance', 'FOV dist', 0.01]];
+  ['fovAlong', 'FOV Y', 0.01], ['fovAcross', 'FOV X', 0.01], ['distance', 'FOV dist', 0.01],
+  ['trigger_anchor', 'trigger at', 'select:off,middle,begin,end'],
+  ['trigger_offset', 'trig offset m', 0.01]];
 
 const fieldDefs = {
   conveyor: [...baseFields, ['speed', 'speed m/s', 0.01]],
@@ -910,6 +1109,25 @@ function addSection(sidebar, sectionKey, target, defs, onChange) {
       wrap.appendChild(input);
       grid.appendChild(wrap);
       uiRefs[full] = input;
+    } else if (typeof step === 'string' && step.startsWith('select:')) {
+      const options = step.slice(7).split(',');
+      const wrap = document.createElement('label');
+      wrap.textContent = label;
+      const select = document.createElement('select');
+      for (const value of options) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value;
+        select.appendChild(option);
+      }
+      select.value = options.includes(String(getPath(target, path))) ? String(getPath(target, path)) : options[0];
+      select.addEventListener('change', () => {
+        setPath(target, path, select.value);
+        onChange(full);
+      });
+      wrap.appendChild(select);
+      grid.appendChild(wrap);
+      uiRefs[full] = select;
     } else if (step === null) {
       const wrap = document.createElement('label');
       wrap.className = 'check';
@@ -978,6 +1196,7 @@ function applyBoxConfig(rec, bc) {
   rec.w = bc.size.w;
   rec.h = bc.size.h;
   rec.weight = weightFor(rec.l, rec.w, rec.h);
+  refreshBoxLabel(rec);
   if (boxWeightEl) boxWeightEl.textContent = `weight: ${rec.weight.toFixed(1)} kg`;
 }
 
@@ -1148,8 +1367,12 @@ function spawnBox() {
   const mesh = makeBox({ l, w, h }, { x, y: b.pos.y, z: b.pos.z + h / 2 }, b.rot, material, boxEdgeMat);
   const id = nextBoxId++;
   mesh.userData.objectKey = `box:${id}`;
-  const rec = { id, mesh, l, w, h, weight: weightFor(l, w, h), vz: 0 };
+  const rec = {
+    id, mesh, l, w, h, weight: weightFor(l, w, h), vz: 0,
+    labelData: null, labelKey: '', labelMesh: null, triggerPrevY: new Map(),
+  };
   mesh.userData.boxRecord = rec;
+  setBoxLabelData(rec, randomLocalLabelData(id));
   boxes.push(rec);
 }
 
@@ -1159,6 +1382,15 @@ function disposeBox(b) {
     selectedObj = null;
     selectionBox.visible = false;
     rebuildSidebar();
+  }
+  if (b.labelMesh) {
+    b.mesh.remove(b.labelMesh);
+    b.labelMesh.material.map?.dispose();
+    b.labelMesh.material.dispose();
+    b.labelMesh = null;
+  }
+  for (const key of capturedTriggers) {
+    if (key.endsWith(`:${b.id}`)) capturedTriggers.delete(key);
   }
   scene.remove(b.mesh);
   b.mesh.material.dispose(); // unitBox / unitEdges are shared
@@ -1231,19 +1463,146 @@ renderer.domElement.addEventListener('pointerup', (event) => {
 });
 
 // ---------------------------------------------------------------------------
-// PiP camera view
+// PiP camera view + cropped OCR trigger frames
 // ---------------------------------------------------------------------------
-const pipRenderer = new THREE.WebGLRenderer({ canvas: document.getElementById('pip'), antialias: false });
+const pipCanvas = document.getElementById('pip');
+// preserveDrawingBuffer is required so a trigger crop can be read back.
+const pipRenderer = new THREE.WebGLRenderer({
+  canvas: pipCanvas,
+  antialias: false,
+  preserveDrawingBuffer: true,
+});
 pipRenderer.setPixelRatio(1);
 pipRenderer.setSize(320, 213, false);
 pipRenderer.outputColorSpace = THREE.SRGBColorSpace;
 
-function renderPip() {
+const cropCanvas = document.createElement('canvas');
+const cropCtx = cropCanvas.getContext('2d');
+const capturedTriggers = new Set();
+
+function renderPipFor(cam) {
   const hidden = [camHelper, footprint, selectionBox, ...Array.from(cameraRigs.values(), (rig) => rig.group)];
   const wasVisible = hidden.map((obj) => obj.visible);
   hidden.forEach((obj) => { obj.visible = false; });
+  configureDemoCam(cam);
   pipRenderer.render(scene, demoCam);
   hidden.forEach((obj, i) => { obj.visible = wasVisible[i]; });
+}
+
+function renderPip() {
+  renderPipFor(selectedCamera());
+}
+
+function projectToPixels(worldPoint, cam) {
+  const p = worldPoint.clone().project(cam);
+  return {
+    x: (p.x * 0.5 + 0.5) * pipCanvas.width,
+    y: (-p.y * 0.5 + 0.5) * pipCanvas.height,
+    behind: p.z < -1 || p.z > 1,
+  };
+}
+
+function labelFacePoint(rec) {
+  const local = [
+    [0.505, 0, 0], [-0.505, 0, 0], [0, 0.505, 0], [0, -0.505, 0],
+  ][Math.max(0, Math.min(3, Number(rec.labelData?.side) || 0))];
+  return new THREE.Vector3(...local).applyMatrix4(rec.mesh.matrixWorld);
+}
+
+function projectedBoxSize(rec, cam) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const sx of [-0.5, 0.5]) {
+    for (const sy of [-0.5, 0.5]) {
+      for (const sz of [-0.5, 0.5]) {
+        const point = new THREE.Vector3(sx, sy, sz).applyMatrix4(rec.mesh.matrixWorld);
+        const p = projectToPixels(point, cam);
+        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+        minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+      }
+    }
+  }
+  return { w: maxX - minX, h: maxY - minY };
+}
+
+async function postLabelImage(payload) {
+  try {
+    await fetch(`${bridgeBase}/label_image`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    console.warn('[ocr] cannot post label image', err);
+  }
+}
+
+async function captureTrigger(cam, rec, triggerY) {
+  const viewingCam = selectedCamera();
+  let payload = null;
+  try {
+    renderPipFor(cam);
+    const center = projectToPixels(labelFacePoint(rec), cam);
+    const size = projectedBoxSize(rec, cam);
+    if (center.behind || size.w <= 0 || size.h <= 0) return;
+
+    const cropW = Math.round(THREE.MathUtils.clamp(size.w * 0.85, 64, pipCanvas.width));
+    const cropH = Math.round(THREE.MathUtils.clamp(size.h * 0.85, 48, pipCanvas.height));
+    const sx = Math.round(THREE.MathUtils.clamp(center.x - cropW / 2, 0, pipCanvas.width - cropW));
+    const sy = Math.round(THREE.MathUtils.clamp(center.y - cropH / 2, 0, pipCanvas.height - cropH));
+
+    cropCanvas.width = cropW;
+    cropCanvas.height = cropH;
+    cropCtx.drawImage(pipCanvas, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
+    const dataUrl = cropCanvas.toDataURL('image/jpeg', 0.86);
+    const imageB64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+    if (!imageB64) return;
+
+    payload = {
+      stamp_sec: performance.now() / 1000,
+      camera_id: cam.id,
+      box_id: rec.id,
+      trigger_anchor: String(cam.trigger_anchor ?? 'off'),
+      trigger_offset: Number(cam.trigger_offset) || 0,
+      trigger_y: triggerY,
+      image_encoding: 'jpeg',
+      image_width: cropW,
+      image_height: cropH,
+      image_b64: imageB64,
+    };
+  } finally {
+    renderPipFor(viewingCam);
+  }
+  if (payload) await postLabelImage(payload);
+}
+
+function boxTriggerY(rec, anchor, offset) {
+  const anchorY = rec.mesh.position.y
+    + (anchor === 'begin' ? -rec.l / 2 : anchor === 'end' ? rec.l / 2 : 0);
+  return anchorY + offset;
+}
+
+function checkTriggerCaptures() {
+  if (sourceMode !== 'zenoh') return;
+  for (const cam of config.cameras) {
+    const anchor = String(cam.trigger_anchor ?? 'off').trim().toLowerCase();
+    if (!['middle', 'begin', 'end'].includes(anchor)) continue;
+    const offset = Number(cam.trigger_offset) || 0;
+    const triggerLineY = cam.pos.y;
+
+    for (const rec of boxes) {
+      const key = `${cam.id}:${rec.id}`;
+      if (capturedTriggers.has(key)) continue;
+      const y = boxTriggerY(rec, anchor, offset);
+      const prev = rec.triggerPrevY?.get(cam.id);
+      if (Number.isFinite(prev)
+        && ((prev < triggerLineY && y >= triggerLineY) || (prev > triggerLineY && y <= triggerLineY))) {
+        capturedTriggers.add(key);
+        void captureTrigger(cam, rec, y);
+      }
+      if (!rec.triggerPrevY) rec.triggerPrevY = new Map();
+      rec.triggerPrevY.set(cam.id, y);
+    }
+  }
 }
 
 document.getElementById('pipCamera').addEventListener('change', (event) => {
@@ -1376,7 +1735,20 @@ document.getElementById('btnToggleLabels').addEventListener('click', () => {
   onConfigChanged('labels.show');
 });
 
+function isTypingTarget(target) {
+  if (!target) return false;
+  return target.tagName === 'INPUT'
+    || target.tagName === 'TEXTAREA'
+    || target.tagName === 'SELECT'
+    || target.isContentEditable === true;
+}
+
 window.addEventListener('keydown', (event) => {
+  if (isTypingTarget(event.target)) return;
+  // Viewer shortcuts only apply while the 3D canvas itself has focus, so
+  // +/- can be typed normally in the sidebar and HUD remains keyboard-safe.
+  if (document.activeElement !== renderer.domElement) return;
+
   if (event.code === 'Space') { event.preventDefault(); togglePause(); }
   if (event.key === 's' || event.key === 'S') requestSpawn();
   if (event.key === '+' || event.key === '=' || event.code === 'PageUp') {
@@ -1475,6 +1847,7 @@ function animate(now) {
   camHelper.update();
   controls.update();
   renderer.render(scene, orbitCam);
+  checkTriggerCaptures();
   renderPip();
 
   document.getElementById('count').textContent = String(boxes.length);

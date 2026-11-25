@@ -15,6 +15,7 @@ pub struct SimOptions {
     pub hz: u64,
     pub speed: f64,
     pub spawn_interval: f64,
+    pub labels_file: Option<String>,
 }
 
 pub struct MonitorOptions {
@@ -32,6 +33,7 @@ struct SimState {
     last_reset_seq: u64,
     last: Instant,
     rng: Lcg,
+    label_pool: LabelPool,
 }
 
 impl SimState {
@@ -46,6 +48,7 @@ impl SimState {
             last_reset_seq: 0,
             last: now,
             rng: Lcg::new(0xC0FFEE),
+            label_pool: LabelPool::load(opts.labels_file.as_deref()),
         }
     }
 }
@@ -152,6 +155,8 @@ fn sanitize_cameras(cfg: &mut SceneConfig) {
             fov_y_m: cfg.fov_y_m,
             fov_x_m: cfg.fov_x_m,
             fov_distance: cfg.fov_distance,
+            trigger_anchor: "off".to_string(),
+            trigger_offset: 0.0,
         });
     }
 
@@ -170,6 +175,13 @@ fn sanitize_cameras(cfg: &mut SceneConfig) {
         if cam.name.trim().is_empty() {
             cam.name = format!("CAM {}", cam.id);
         }
+        let anchor = cam.trigger_anchor.trim().to_lowercase();
+        cam.trigger_anchor = if matches!(anchor.as_str(), "middle" | "begin" | "end") {
+            anchor
+        } else {
+            "off".to_string()
+        };
+        if !cam.trigger_offset.is_finite() { cam.trigger_offset = 0.0; }
         if cam.fov_distance <= 0.0 { cam.fov_distance = 1.0; }
         if cam.fov_y_m <= 0.0 { cam.fov_y_m = 0.6; }
         if cam.fov_x_m <= 0.0 { cam.fov_x_m = 0.4; }
@@ -210,7 +222,7 @@ fn apply_config(state: &mut SimState, cfg: SceneConfig, now: Instant) {
     state.last_reset_seq = state.last_reset_seq.max(cfg.reset_seq);
 
     if cfg.spawn_seq > state.last_spawn_seq {
-        let box_state = spawn_box(&mut state.rng, state.next_id, &cfg);
+        let box_state = spawn_box(&mut state.rng, &mut state.label_pool, state.next_id, &cfg);
         state.next_id += 1;
         state.boxes.push(box_state);
         state.last_spawn_seq = cfg.spawn_seq;
@@ -242,7 +254,7 @@ fn step(state: &mut SimState, dt: f64, now: Instant) {
     let cfg = &state.config;
 
     if now >= state.next_spawn {
-        let box_state = spawn_box(&mut state.rng, state.next_id, cfg);
+        let box_state = spawn_box(&mut state.rng, &mut state.label_pool, state.next_id, cfg);
         state.next_id += 1;
         state.boxes.push(box_state);
         state.next_spawn = now + Duration::from_secs_f64(cfg.spawn_interval.max(0.01));
@@ -305,6 +317,8 @@ fn default_config(speed: f64, spawn_interval: f64) -> SceneConfig {
         fov_y_m: 0.60,
         fov_x_m: 0.40,
         fov_distance: 1.0,
+        trigger_anchor: "off".to_string(),
+        trigger_offset: 0.0,
     };
     // Same point as the top camera, pitched 90 degrees down the belt so it
     // sees the sides of boxes as they travel toward the sink.
@@ -317,6 +331,8 @@ fn default_config(speed: f64, spawn_interval: f64) -> SceneConfig {
         fov_y_m: 1.60,
         fov_x_m: 0.60,
         fov_distance: 1.0,
+        trigger_anchor: "middle".to_string(),
+        trigger_offset: 0.0,
     };
     let cameras = vec![top.clone(), side];
 
@@ -359,7 +375,7 @@ fn default_config(speed: f64, spawn_interval: f64) -> SceneConfig {
     }
 }
 
-fn spawn_box(rng: &mut Lcg, id: u64, cfg: &SceneConfig) -> BoxState {
+fn spawn_box(rng: &mut Lcg, label_pool: &mut LabelPool, id: u64, cfg: &SceneConfig) -> BoxState {
     let length = if cfg.boxes_random_size {
         lerp(cfg.boxes_min.y, cfg.boxes_max.y, rng.next_f64())
     } else {
@@ -379,6 +395,7 @@ fn spawn_box(rng: &mut Lcg, id: u64, cfg: &SceneConfig) -> BoxState {
     let half_width = cfg.conveyor_size.x / 2.0;
     let x_limit = (half_width - width / 2.0).max(0.0);
     let x = cfg.boxes_pos.x + (rng.next_f64() * 2.0 - 1.0) * x_limit;
+    let label = label_pool.next(rng, id);
 
     BoxState {
         id,
@@ -394,6 +411,11 @@ fn spawn_box(rng: &mut Lcg, id: u64, cfg: &SceneConfig) -> BoxState {
             z: height,
         },
         weight_kg: weight_from_volume(length * width * height, cfg),
+        label_side: (rng.next_f64() * 4.0).floor() as u64,
+        label_seed: (rng.next_f64() * u64::MAX as f64) as u64,
+        country_code: label.country_code,
+        barcode: label.barcode,
+        order_number: label.order_number,
     }
 }
 
@@ -460,5 +482,66 @@ impl Lcg {
             .wrapping_mul(6364136223846793005)
             .wrapping_add(1442695040888963407);
         ((self.0 >> 11) as f64) / ((1_u64 << 53) as f64)
+    }
+}
+
+struct LabelRecord {
+    order_number: String,
+    country_code: String,
+    barcode: String,
+}
+
+// Optional future input: one `ORDER COUNTRY BARCODE` per line. When absent,
+// labels are generated deterministically from the sim RNG.
+struct LabelPool {
+    records: Vec<LabelRecord>,
+    next: usize,
+}
+
+impl LabelPool {
+    fn load(path: Option<&str>) -> Self {
+        let mut records = Vec::new();
+        if let Some(path) = path {
+            match std::fs::read_to_string(path) {
+                Ok(text) => {
+                    for line in text.lines() {
+                        let line = line.trim();
+                        if line.is_empty() || line.starts_with('#') { continue; }
+                        let parts: Vec<&str> = line.split_whitespace().collect();
+                        if parts.len() < 3 { continue; }
+                        records.push(LabelRecord {
+                            order_number: parts[0].to_string(),
+                            country_code: parts[1].to_string(),
+                            barcode: parts[2].to_string(),
+                        });
+                    }
+                }
+                Err(err) => eprintln!("[sim] labels file {path} unreadable: {err}"),
+            }
+        }
+        Self { records, next: 0 }
+    }
+
+    fn next(&mut self, rng: &mut Lcg, id: u64) -> LabelRecord {
+        if let Some(record) = self.records.get(self.next) {
+            self.next += 1;
+            return LabelRecord {
+                order_number: record.order_number.clone(),
+                country_code: record.country_code.clone(),
+                barcode: record.barcode.clone(),
+            };
+        }
+
+        let countries = ["NL", "DE", "US", "JP", "GB", "FR"];
+        let country = countries[(rng.next_f64() * countries.len() as f64) as usize];
+        let mut barcode = String::new();
+        for _ in 0..12 {
+            barcode.push(char::from(b'0' + (rng.next_f64() * 10.0) as u8));
+        }
+        LabelRecord {
+            order_number: format!("ORD-{id:06}"),
+            country_code: country.to_string(),
+            barcode,
+        }
     }
 }

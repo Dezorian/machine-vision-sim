@@ -1,6 +1,6 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use crate::messages::{SceneConfig, SceneSnapshot};
+use crate::messages::{LabelImage, SceneConfig, SceneSnapshot};
 use hiroz::{Builder, Result, context::ZContextBuilder};
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
@@ -13,6 +13,7 @@ pub struct BridgeOptions {
     pub scene_topic: String,
     pub config_topic: String,
     pub addr: String,
+    pub label_topic: String,
 }
 
 const CORS: &str = concat!(
@@ -31,9 +32,12 @@ pub async fn run_bridge(opts: BridgeOptions) -> Result<()> {
     let node = ctx.create_node("conveyor_bridge").build()?;
     let zsub_scene = node.create_sub::<SceneSnapshot>(&opts.scene_topic).build()?;
     let zpub_config = node.create_pub::<SceneConfig>(&opts.config_topic).build()?;
+    let zpub_label = node.create_pub::<LabelImage>(&opts.label_topic).build()?;
 
     let (scene_tx, _) = broadcast::channel::<Arc<SceneSnapshot>>(16);
     let (config_tx, mut config_rx) = mpsc::channel::<SceneConfig>(32);
+    let (label_tx, mut label_rx) = mpsc::channel::<Arc<LabelImage>>(8);
+    let label_cache: Arc<Mutex<Option<Arc<LabelImage>>>> = Arc::new(Mutex::new(None));
 
     let scene_forwarder = scene_tx.clone();
     tokio::spawn(async move {
@@ -58,18 +62,28 @@ pub async fn run_bridge(opts: BridgeOptions) -> Result<()> {
         }
     });
 
+    tokio::spawn(async move {
+        while let Some(label) = label_rx.recv().await {
+            if let Err(err) = zpub_label.async_publish(label.as_ref()).await {
+                eprintln!("[bridge] label image publish failed: {err}");
+            }
+        }
+    });
+
     let listener = TcpListener::bind(opts.addr.as_str()).await?;
     println!(
-        "Bridge on http://{}: SSE /scene, POST /config ({} -> browser, browser -> {})",
-        opts.addr, opts.scene_topic, opts.config_topic
+        "Bridge on http://{}: SSE /scene, POST /config, POST /label_image, GET /label_image/latest",
+        opts.addr
     );
 
     loop {
         let (stream, peer) = listener.accept().await?;
         let scene_tx = scene_tx.clone();
         let config_tx = config_tx.clone();
+        let label_tx = label_tx.clone();
+        let label_cache = label_cache.clone();
         tokio::spawn(async move {
-            if let Err(err) = handle_connection(stream, scene_tx, config_tx).await {
+            if let Err(err) = handle_connection(stream, scene_tx, config_tx, label_tx, label_cache).await {
                 eprintln!("[bridge] {peer}: {err}");
             }
         });
@@ -80,6 +94,8 @@ async fn handle_connection(
     stream: TcpStream,
     scene_tx: broadcast::Sender<Arc<SceneSnapshot>>,
     config_tx: mpsc::Sender<SceneConfig>,
+    label_tx: mpsc::Sender<Arc<LabelImage>>,
+    label_cache: Arc<Mutex<Option<Arc<LabelImage>>>>,
 ) -> HttpResult {
     let (read, mut write) = stream.into_split();
     let mut reader = BufReader::new(read);
@@ -87,8 +103,62 @@ async fn handle_connection(
 
     match (method.as_str(), path.as_str()) {
         ("GET", "/scene") => serve_sse(&mut write, scene_tx).await,
-        ("OPTIONS", "/scene" | "/config") => {
+        ("OPTIONS", "/scene" | "/config" | "/label_image" | "/label_image/latest") => {
             respond(&mut write, "204 No Content", "", "").await
+        }
+        ("GET", "/label_image/latest") => {
+            let latest = label_cache.lock().ok().and_then(|guard| guard.clone());
+            match latest {
+                Some(label) => {
+                    let json = serde_json::to_string(label.as_ref())?;
+                    respond(&mut write, "200 OK", "Content-Type: application/json\r\n", &json).await
+                }
+                None => {
+                    respond(
+                        &mut write,
+                        "404 Not Found",
+                        "Content-Type: text/plain\r\n",
+                        "no label image yet",
+                    )
+                    .await
+                }
+            }
+        }
+        ("POST", "/label_image") => {
+            let mut body = vec![0_u8; content_length];
+            reader.read_exact(&mut body).await?;
+            let label: LabelImage = match serde_json::from_slice(&body) {
+                Ok(label) => label,
+                Err(err) => {
+                    return respond(
+                        &mut write,
+                        "400 Bad Request",
+                        "Content-Type: text/plain\r\n",
+                        &format!("invalid LabelImage: {err}"),
+                    )
+                    .await;
+                }
+            };
+            let label = Arc::new(label);
+            if let Ok(mut cache) = label_cache.lock() {
+                *cache = Some(label.clone());
+            }
+            if let Err(err) = label_tx.send(label).await {
+                return respond(
+                    &mut write,
+                    "503 Service Unavailable",
+                    "Content-Type: text/plain\r\n",
+                    "label publisher unavailable",
+                )
+                .await;
+            }
+            respond(
+                &mut write,
+                "200 OK",
+                "Content-Type: application/json\r\n",
+                "{\"ok\":true}",
+            )
+            .await
         }
         ("POST", "/config") => {
             let mut body = vec![0_u8; content_length];

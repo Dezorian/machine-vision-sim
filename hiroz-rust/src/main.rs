@@ -30,6 +30,9 @@ enum Command {
         speed: f64,
         #[arg(long, default_value_t = 1.6)]
         spawn_interval: f64,
+        /// Optional `ORDER COUNTRY BARCODE` text file for box labels.
+        #[arg(long)]
+        labels_file: Option<String>,
     },
     /// Print scenes received from the sim.
     Monitor {
@@ -48,6 +51,8 @@ enum Command {
         config_topic: String,
         #[arg(long, default_value = "0.0.0.0:8765")]
         addr: String,
+        #[arg(long, default_value = "/conveyor/label_image")]
+        label_topic: String,
     },
 }
 
@@ -61,6 +66,7 @@ async fn main() -> Result<()> {
             hz,
             speed,
             spawn_interval,
+            labels_file,
         } => {
             sim::run_sim(SimOptions {
                 router,
@@ -69,6 +75,7 @@ async fn main() -> Result<()> {
                 hz,
                 speed,
                 spawn_interval,
+                labels_file,
             })
             .await
         }
@@ -80,12 +87,14 @@ async fn main() -> Result<()> {
             scene_topic,
             config_topic,
             addr,
+            label_topic,
         } => {
             bridge::run_bridge(BridgeOptions {
                 router,
                 scene_topic,
                 config_topic,
                 addr,
+                label_topic,
             })
             .await
         }

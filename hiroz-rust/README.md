@@ -1,8 +1,9 @@
 # Hiroz conveyor sim
 
 Rust/Zenoh side of the uConsole conveyor demo. It is the source of truth for
-the scene: the sim owns boxes, motion, camera/scale state and the scale reading;
-the browser renders snapshots and publishes editor changes back. It uses
+the scene: the sim owns boxes, motion, camera/scale state, the scale reading,
+box label data, and camera trigger settings; the browser renders snapshots and
+publishes editor changes back. It uses
 [Hiroz](https://github.com/ZettaScaleLabs/hiroz) 0.2.1 message types over a
 Zenoh router.
 
@@ -23,6 +24,8 @@ The bridge listens on `http://<uconsole-ip>:8765`:
 
 - `GET /scene` — SSE stream of `SceneSnapshot` JSON (CORS enabled)
 - `POST /config` — JSON `SceneConfig` from the browser editor
+- `POST /label_image` — JSON `LabelImage` crop from the browser's camera trigger
+- `GET /label_image/latest` — latest `LabelImage` JSON, or HTTP 404 if none yet
 
 The router REST/UI is at `http://<uconsole-ip>:8000`; Zenoh clients use
 `tcp/<uconsole-ip>:7447`.
@@ -41,7 +44,8 @@ Useful options:
 ```bash
 hiroz-conveyor sim --help
 hiroz-conveyor sim --hz 20 --speed 0.75 --spawn-interval 1.2
-hiroz-conveyor bridge --addr 0.0.0.0:8765
+hiroz-conveyor sim --labels-file /path/to/labels.txt
+hiroz-conveyor bridge --addr 0.0.0.0:8765 --label-topic /conveyor/label_image
 hiroz-conveyor monitor --topic /conveyor/scene
 ```
 
@@ -53,19 +57,21 @@ snapshot lands near one display frame; no interpolation is needed at that rate.
 
 ## Topic and messages
 
-Topics: `/conveyor/scene` (sim → bridge/browser) and `/conveyor/config`
-(browser/bridge → sim).
+Topics: `/conveyor/scene` (sim → bridge/browser), `/conveyor/config`
+(browser/bridge → sim), and `/conveyor/label_image` (bridge → ROS2 for cropped
+OCR frames).
 
 Custom messages live in `src/messages.rs`:
 
 | Type | Fields |
 |---|---|
 | `conveyor_demo/msg/Vec3` | `x`, `y`, `z` |
-| `conveyor_demo/msg/BoxState` | `id`, `pose`, `rot_deg`, `size`, `weight_kg` |
+| `conveyor_demo/msg/BoxState` | `id`, `pose`, `rot_deg`, `size`, `weight_kg`, `label_side`, `label_seed`, `country_code`, `barcode`, `order_number` |
 | `conveyor_demo/msg/CameraState` | `pose`, `rot_deg`, `fov_y_deg`, `fov_x_deg`, `fov_distance` (for older clients) |
-| `conveyor_demo/msg/CameraConfig` | `id`, `name`, `pose`, `rot_deg`, `size`, `fov_y_m`, `fov_x_m`, `fov_distance` |
+| `conveyor_demo/msg/CameraConfig` | `id`, `name`, `pose`, `rot_deg`, `size`, `fov_y_m`, `fov_x_m`, `fov_distance`, `trigger_anchor`, `trigger_offset` |
 | `conveyor_demo/msg/SceneConfig` | conveyor/camera/scale/sink/box poses and sizes, `cameras`, FOV footprint, spawner settings, `paused`, `config_seq`, `spawn_seq`, `reset_seq`, `box_overrides` |
 | `conveyor_demo/msg/SceneSnapshot` | `stamp_sec`, `conveyor_speed`, `camera`, `cameras`, `scale_pose`, `scale_kg`, `config`, `boxes` |
+| `conveyor_demo/msg/LabelImage` | `stamp_sec`, `camera_id`, `box_id`, `trigger_anchor`, `trigger_offset`, `trigger_y`, `image_encoding`, `image_width`, `image_height`, `image_b64` |
 
 `SceneSnapshot.config` is the authoritative copy of every editable static
 setting. The browser sends `SceneConfig` on every edit; `config_seq` lets it
@@ -77,6 +83,25 @@ without `cameras` gets one synthesized from those fields. The default list has
 a top-down camera (id 1, `TOP`) and a side camera (id 2, `SIDE`) at the same
 pose, pitched 90° down the belt. Names are editable in the sidebar; empty names
 get a `CAM <id>` fallback in the sim.
+
+### Labels and triggers
+
+Spawned boxes carry `label_side` (`0=+X`, `1=-X`, `2=+Y`, `3=-Y`+X`, `1=-X`, `2=+Y`, `3=-Y`; never
+top/bottom), a deterministic `label_seed` used by the browser for blur/skew, and
+the printed `country_code`, `barcode`, and `order_number`. Without
+`--labels-file`, the sim generates these from its RNG. With it, each line is
+`ORDER COUNTRY BARCODE`; lines are consumed in order and then fall back to RNG
+generation.
+
+`CameraConfig.trigger_anchor` is sanitised to `off`, `middle`, `begin`, or `end`;
+anything else becomes `off`. `trigger_offset` is metres along **+Y** from that
+box reference point. The browser detects the reference point crossing the
+camera's world Y position and POSTs only the cropped label image to
+`POST /label_image`. The bridge caches it in `GET /label_image/latest` and
+publishes it as `LabelImage` on `/conveyor/label_image`; `trigger_y` is the box
+reference point's world Y at capture and `stamp_sec` is browser capture time.
+The full PiP view is web-only and never enters that topic. The separate
+`ros2_label_ocr` package consumes this contract.
 
 Coordinates match the viewer: **X** across the belt, **Y** transport direction,
 **Z** up. Box size is `(x=width, y=length, z=height)`. Weight is linear in box
@@ -95,5 +120,7 @@ volume from 1 kg (smallest allowed box) to 10 kg (largest allowed box).
 
 1. Rate measurements are done; keep the browser sim at 60 Hz and leave
    interpolation off unless a higher-rate viewer is needed.
-2. Optionally add `sensor_msgs/Image`/`CameraInfo` publishers for the PiP view.
+2. Wire YOLO weights and an OCR engine into `ros2_label_ocr` to read weight,
+   country code, and order number from the published crops.
+3. Optionally add `sensor_msgs/Image`/`CameraInfo` publishers for the PiP view.
 

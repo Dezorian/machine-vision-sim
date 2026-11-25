@@ -26,6 +26,12 @@ pub struct BoxState {
     pub rot_deg: Vec3,
     pub size: Vec3,
     pub weight_kg: f64,
+    // Label face: 0 = +X, 1 = -X, 2 = +Y, 3 = -Y. Top/bottom are unused.
+    pub label_side: u64,
+    pub label_seed: u64,
+    pub country_code: String,
+    pub barcode: String,
+    pub order_number: String,
 }
 
 impl ZMessage for BoxState {
@@ -61,6 +67,9 @@ pub struct CameraConfig {
     pub fov_y_m: f64,
     pub fov_x_m: f64,
     pub fov_distance: f64,
+    // Trigger line for cropped OCR frames: off | middle | begin | end.
+    pub trigger_anchor: String,
+    pub trigger_offset: f64,
 }
 
 impl ZMessage for CameraConfig {
@@ -135,4 +144,26 @@ pub struct SceneSnapshot {
 
 impl ZMessage for SceneSnapshot {
     type Serdes = SerdeCdrSerdes<SceneSnapshot>;
+}
+
+// A cropped label frame, captured only when a box crosses a camera trigger.
+// The full PiP stream is web viewing only and is never sent to the OCR node.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, MessageTypeInfo)]
+#[serde(default)]
+#[ros_msg(type_name = "conveyor_demo/msg/LabelImage")]
+pub struct LabelImage {
+    pub stamp_sec: f64,
+    pub camera_id: u64,
+    pub box_id: u64,
+    pub trigger_anchor: String,
+    pub trigger_offset: f64,
+    pub trigger_y: f64,
+    pub image_encoding: String,
+    pub image_width: u64,
+    pub image_height: u64,
+    pub image_b64: String,
+}
+
+impl ZMessage for LabelImage {
+    type Serdes = SerdeCdrSerdes<LabelImage>;
 }
