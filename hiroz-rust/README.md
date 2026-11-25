@@ -80,9 +80,9 @@ ignore stale snapshots until the sim echoes that edit. `spawn_seq` and
 selected box's pose/size edit. `cameras` is the authoritative editable camera
 list; the classic `camera`/`camera_*` fields mirror `cameras[0]`, and a config
 without `cameras` gets one synthesized from those fields. The default list has
-a top-down camera (id 1, `TOP`) and a side camera (id 2, `SIDE`) at the same
-pose, tilted 25° down toward the belt. Names are editable in the sidebar; empty
-names get a `CAM <id>` fallback in the sim.
+a top-down camera (id 1, `TOP`) and a side camera (id 2, `SIDE`) looking exactly
+along +Y from box height. Names are editable in the sidebar; empty names get a
+`CAM <id>` fallback in the sim.
 
 ### Labels and triggers
 
@@ -95,9 +95,10 @@ generation.
 
 `CameraConfig.trigger_anchor` is sanitised to `off`, `middle`, `begin`, or `end`;
 anything else becomes `off`. `trigger_offset` is metres along **+Y** from that
-box reference point. The browser detects the reference point crossing the
-camera's world Y position and POSTs only the cropped label image to
-`POST /label_image`. The bridge caches it in `GET /label_image/latest` and
+box reference point. The browser captures when that point first enters the
+camera's frustum, so an exact +Y SIDE view waits until the box is visible
+instead of firing at the camera's own Y plane. It POSTs only the cropped label
+image to `POST /label_image`. The bridge caches it in `GET /label_image/latest` and
 publishes it as `LabelImage` on `/conveyor/label_image`; `trigger_y` is the box
 reference point's world Y at capture and `stamp_sec` is browser capture time.
 The full PiP view is web-only and never enters that topic. The separate

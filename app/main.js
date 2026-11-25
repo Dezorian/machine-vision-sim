@@ -82,10 +82,10 @@ const config = {
     // Top view: local -Z points down world -Z.
     makeCamera(1, 'TOP', { x: 0, y: 2.0, z: 1.0 }, { x: 0, y: 0, z: 0 }, 0.60, 0.40,
       undefined, { anchor: 'off', offset: 0 }),
-    // Side view: same point, tilted down toward the belt. This looks far
-    // enough along +Y that a box at the trigger line is still in front of the
-    // camera and its label can be cropped.
-    makeCamera(2, 'SIDE', { x: 0, y: 2.0, z: 1.0 }, { x: 25, y: 0, z: 0 }, 1.60, 0.60,
+    // Side view: exactly along +Y (local -Z rotated onto world +Y), at box
+    // height so labels are inside the frustum. Capture waits until the box
+    // enters this view rather than firing at the camera's own Y plane.
+    makeCamera(2, 'SIDE', { x: 0, y: 2.0, z: 0.15 }, { x: 90, y: 0, z: 0 }, 1.60, 0.60,
       undefined, { anchor: 'middle', offset: 0 }),
   ],
   scale: {
@@ -210,17 +210,25 @@ function migrateCameraTriggers(target) {
   }
 }
 
-// The old SIDE camera looked exactly along +Y, so a box at the trigger line sat
-// in the camera plane and no crop could be produced. Tilt the stock SIDE camera
-// down toward the belt; leave deliberately custom angles alone.
+// Restore the stock SIDE camera to an exact +Y view at box height. Previous
+// builds either started at z=1 or were tilted to RX=25; both came from the same
+// stock position, so only repair that position and leave custom cameras alone.
 function migrateSideCameraView(target) {
   for (const cam of target.cameras || []) {
     const isSide = cam.id === 2 || String(cam.name ?? '').trim().toUpperCase() === 'SIDE';
-    if (!isSide || !cam.rot) continue;
-    if (Math.abs(Number(cam.rot.x) - 90) < 1e-6
+    if (!isSide || !cam.pos || !cam.rot) continue;
+    const stockXY = Math.abs(Number(cam.pos.x) || 0) < 1e-6
+      && Math.abs(Number(cam.pos.y) - 2) < 1e-6;
+    if (!stockXY) continue;
+    const oldHeight = Math.abs(Number(cam.pos.z) - 1) < 1e-6;
+    const tilted = Math.abs(Number(cam.rot.x) - 25) < 1e-6
       && Math.abs(Number(cam.rot.y) || 0) < 1e-6
-      && Math.abs(Number(cam.rot.z) || 0) < 1e-6) {
-      cam.rot.x = 25;
+      && Math.abs(Number(cam.rot.z) || 0) < 1e-6;
+    if (oldHeight || tilted) {
+      cam.pos.z = 0.15;
+      cam.rot.x = 90;
+      cam.rot.y = 0;
+      cam.rot.z = 0;
     }
   }
 }
@@ -741,6 +749,17 @@ function configureDemoCam(cam) {
   demoCam.far = Math.max(distance * 1.25 + 0.25, config.conveyor.size.l + 1.0);
   demoCam.updateProjectionMatrix();
   demoCam.updateMatrixWorld(true);
+}
+
+// Trigger detection uses the same projection as the PiP renderer, so a crop is
+// taken exactly when the watched box point first enters that camera's view.
+const triggerFrustum = new THREE.Frustum();
+const triggerProjection = new THREE.Matrix4();
+
+function configureTriggerView(cam) {
+  configureDemoCam(cam);
+  triggerProjection.multiplyMatrices(demoCam.projectionMatrix, demoCam.matrixWorldInverse);
+  triggerFrustum.setFromProjectionMatrix(triggerProjection);
 }
 
 function applyConfig() {
@@ -1703,20 +1722,28 @@ function checkTriggerCaptures() {
     const anchor = String(cam.trigger_anchor ?? 'off').trim().toLowerCase();
     if (!['middle', 'begin', 'end'].includes(anchor)) continue;
     const offset = Number(cam.trigger_offset) || 0;
-    const triggerLineY = cam.pos.y;
 
+    configureTriggerView(cam);
     for (const rec of boxes) {
       const key = `${cam.id}:${rec.id}`;
       if (capturedTriggers.has(key)) continue;
-      const y = boxTriggerY(rec, anchor, offset);
-      const prev = rec.triggerPrevY?.get(cam.id);
-      if (Number.isFinite(prev)
-        && ((prev < triggerLineY && y >= triggerLineY) || (prev > triggerLineY && y <= triggerLineY))) {
-        capturedTriggers.add(key);
-        void captureTrigger(cam, rec, y);
-      }
-      if (!rec.triggerPrevY) rec.triggerPrevY = new Map();
-      rec.triggerPrevY.set(cam.id, y);
+
+      // Watch the configured box reference point. A SIDE camera looking along
+      // +Y no longer fires at its own Y plane; it fires when the box has moved
+      // far enough to be visible in this camera's frustum.
+      const triggerY = boxTriggerY(rec, anchor, offset);
+      const triggerPoint = new THREE.Vector3(rec.mesh.position.x, triggerY, rec.mesh.position.z);
+      if (!triggerFrustum.containsPoint(triggerPoint)) continue;
+
+      // The crop is centred on the label face, so require that face to be
+      // inside the image too. This avoids posting a crop from behind the lens.
+      const labelPixel = projectToPixels(labelFacePoint(rec), demoCam);
+      if (labelPixel.behind
+        || labelPixel.x < 0 || labelPixel.x > pipCanvas.width
+        || labelPixel.y < 0 || labelPixel.y > pipCanvas.height) continue;
+
+      capturedTriggers.add(key);
+      void captureTrigger(cam, rec, triggerY);
     }
   }
 }

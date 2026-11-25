@@ -51,10 +51,9 @@ Cameras live under the **cameras** group in the sidebar tree. Select one to edit
 its name, pose, FOV, and OCR trigger (`trigger at`, `trig offset m`); the name
 appears in the tree and PiP dropdown. Use the dropdown above the PiP view to
 switch the live view, or press **+ CAM** (also available as **+ add camera** in
-the tree) to add another camera. The default pair shares the same pose: CAM 1
-looks down, CAM 2 is tilted 25° down toward the belt so a box at the trigger
-line is still in front of the camera. CAM 1 has its trigger off; CAM 2 triggers
-at each box's `middle`.
+the tree) to add another camera. CAM 1 looks down from above; CAM 2 looks
+exactly along **+Y** from box height. CAM 1 has its trigger off; CAM 2 captures
+a box's `middle` once the box has moved far enough to enter that camera's view.
 
 The PiP **LIVE / TRIGGER** button toggles between the selected camera's live
 view and that camera's latest cropped trigger image. Switching the camera
@@ -89,7 +88,7 @@ All units are metres.
 |---|---|
 | Conveyor | 4.00 m along Y, 0.60 m across X |
 | Camera 1 (top) | x = 0, y = 2.00, z = 1.00, looking down -Z |
-| Camera 2 (side) | same point, pitched 90° down +Y to see box sides |
+| Camera 2 (side) | x = 0, y = 2.00, z = 0.15, looking exactly along +Y |
 | FOV on belt (top) | 0.60 m along Y (transport) × 0.40 m across X |
 | FOV footprint | y = 1.70 .. 2.30, x = -0.20 .. +0.20 |
 | Scale | starts at y = 2.30, 0.60 m along Y × 0.60 m across X |
@@ -167,8 +166,10 @@ Each camera has two trigger fields:
 | `trigger at` | `off`, `middle`, `begin`, `end` | Which box reference point triggers a crop |
 | `trig offset m` | metres | Offset along **+Y** from that reference point |
 
-The browser watches the box reference point (plus offset) crossing the camera's
-world **Y** position. On a crossing it renders that camera, crops around the
+The browser watches the box reference point (plus offset) and captures when
+that point first enters the camera's frustum. This lets a SIDE camera look
+exactly along **+Y** and still wait until the box is visible, instead of firing
+at the camera's own Y plane. On entry it renders that camera, crops around the
 label face of that box, JPEG-encodes only that crop, and POSTs it to the bridge
 at `POST /label_image`. The full PiP stream stays in the browser for viewing;
 it is never sent to OCR. A box/camera pair is captured at most once per run.
