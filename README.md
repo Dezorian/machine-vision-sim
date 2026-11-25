@@ -7,7 +7,7 @@ over Zenoh.
 ## Run
 
 ```bash
-cd /home/cpi/uconsole-scene-demo
+cd ~/Developer/uconsole-scene-demo
 docker compose up -d
 ```
 
