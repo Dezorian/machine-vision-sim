@@ -1,4 +1,8 @@
-# uConsole conveyor / camera FOV demo
+# machine-vision-sim
+
+A quick and easy way to setup camera and moving objects in a visual environment to test if your machine vision idea could work
+
+## uConsole conveyor / camera FOV demo
 
 A lightweight Three.js scene served from Docker. By default the Rust/Hiroz sim
 is the source of truth: it owns boxes, motion, camera/scale state, and the scale
