@@ -1,14 +1,21 @@
 # uConsole conveyor / camera FOV demo
 
-A lightweight Three.js scene served from Docker. The simulation runs in the
-browser; later it can be replaced by a Hiroz/Rust sim publishing the same data
-over Zenoh.
+A lightweight Three.js scene served from Docker. By default the Rust/Hiroz sim
+is the source of truth: it owns boxes, motion, camera/scale state, and the scale
+reading; the browser only renders snapshots and sends editor changes back.
+`?source=local` restores the original in-browser simulation for comparison.
 
 ## Run
 
 ```bash
+# viewer
 cd ~/Developer/uconsole-scene-demo
 docker compose up -d
+
+# sim + bridge (Zenoh router included)
+cd ~/Developer/uconsole-scene-demo/hiroz-rust
+docker compose up -d          # zenoh + bridge (:8765)
+docker compose --profile tools up -d app   # sim publisher at 60 Hz
 ```
 
 Open:
@@ -31,6 +38,9 @@ Controls: drag to orbit, `+` / `-` or `PageUp` / `PageDown` to zoom (also
 in the 3D view to select and edit it. The vertical **PANEL** tab on the right
 edge opens/closes the sidebar. A short **Reset** restores the saved defaults;
 holding **Reset** for 3 s saves the current values as the new defaults.
+
+The HUD shows the active `source`: `sim` (default, via the bridge on port 8765),
+`local` (`?source=local`), or `sim offline`.
 
 ## Coordinate system
 
@@ -157,16 +167,22 @@ Roll back with `git reset --hard <hash>`.
 
 ## Hiroz / Rust setup
 
-The first Rust step lives in [`hiroz-rust/`](hiroz-rust/README.md). It runs in
-Docker on the CM4 and publishes a `SceneSnapshot` (conveyor speed, camera state,
-live boxes, scale reading) on `/conveyor/scene` through a Zenoh router. See that
-README for build/run commands.
+The Rust side lives in [`hiroz-rust/`](hiroz-rust/README.md). The sim publishes
+`SceneSnapshot` on `/conveyor/scene`; the bridge exposes it as SSE at
+`http://<uconsole-ip>:8765/scene` and accepts editor changes at `POST /config`,
+which it publishes as `SceneConfig` on `/conveyor/config`.
 
-Next steps:
+The browser never advances boxes itself in the default mode. It renders the
+latest snapshot directly (no interpolation), syncing boxes by `id`, and sends
+sidebar changes, Pause/Spawn/Reset to the sim. Boxes, scale reading, camera
+state, belt motion, and falling into the sink all come from Rust. Label offsets
+remain viewer-only.
 
-1. Add a Zenoh → WebSocket bridge that forwards `SceneSnapshot` to the page.
-2. Change `app/main.js` to consume that stream instead of running `spawnBox()`
-   locally.
-3. Optionally publish `sensor_msgs/Image` / `CameraInfo` for the PiP camera view.
+No interpolation is used yet. Measured on the uConsole: the sim publisher holds
+`--hz 32000` (requesting 64 kHz degrades to roughly 50-57 kHz), while the SSE
+bridge saturates near 5.8k snapshots/s (~11 MB/s). Because the browser applies
+every snapshot and renders at roughly one frame per display refresh, Compose
+runs the sim at 60 Hz -- one update per typical frame -- as the practical
+no-interpolation setting. Optionally, `sensor_msgs/Image` / `CameraInfo` could
+later drive the PiP view.
 
-The Three.js rendering, selection, sidebar, footprint, and PiP view stay the same.

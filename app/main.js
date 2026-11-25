@@ -5,6 +5,30 @@ const deg = THREE.MathUtils.degToRad;
 const rad = THREE.MathUtils.radToDeg;
 const rand = (a, b) => a + Math.random() * (b - a);
 
+// Default: the Rust sim is authoritative and the browser only renders/edits it.
+// ?source=local restores the original in-browser simulation for comparison.
+const params = new URLSearchParams(window.location.search);
+const sourceMode = params.get('source') === 'local' ? 'local' : 'zenoh';
+const bridgeBase = params.get('bridge') || `${location.protocol === 'https:' ? 'https' : 'http'}://${location.hostname}:8765`;
+
+let paused = false;
+let configSeq = 0;
+let spawnSeq = 0;
+let resetSeq = 0;
+let pendingConfigSeq = 0;
+let lastBeltStamp = null;
+let configRetryTimer = null;
+let lastConfigBody = null;
+
+const vec = (v) => ({
+  x: Number.isFinite(v?.x) ? v.x : 0,
+  y: Number.isFinite(v?.y) ? v.y : 0,
+  z: Number.isFinite(v?.z) ? v.z : 0,
+});
+const sizeFromVec = (v) => ({ l: vec(v).y, w: vec(v).x, h: vec(v).z });
+const copySize = (s) => ({ l: s.l, w: s.w, h: s.h });
+const sceneSize = (s) => ({ x: s.w, y: s.l, z: s.h });
+
 // ---------------------------------------------------------------------------
 // Coordinate system:
 //   X = across belt, Y = transport direction (0 -> 4 m), Z = up.
@@ -425,7 +449,204 @@ function applyConfig() {
   document.getElementById('speedValue').textContent = `${c.conveyor.speed.toFixed(2)} m/s`;
   document.getElementById('fovValue').textContent =
     `${c.camera.fovAlong.toFixed(2)} × ${c.camera.fovAcross.toFixed(2)} m`;
+  // Persistence is handled by the editor/sim commit path, not by every snapshot.
+}
+
+// ---------------------------------------------------------------------------
+// Sim bridge: the browser sends edits; snapshots are the only scene state.
+// ---------------------------------------------------------------------------
+function sceneConfigFromEditor(options = {}) {
+  const c = config;
+  return {
+    conveyor_pos: vec(c.conveyor.pos),
+    conveyor_rot_deg: vec(c.conveyor.rot),
+    conveyor_size: sceneSize(c.conveyor.size), // x = W, y = L, z = H
+    conveyor_speed: c.conveyor.speed,
+
+    camera_pose: vec(c.camera.pos),
+    camera_rot_deg: vec(c.camera.rot),
+    camera_size: sceneSize(c.camera.size),
+    fov_y_m: c.camera.fovAlong,
+    fov_x_m: c.camera.fovAcross,
+    fov_distance: c.camera.distance,
+
+    scale_pose: vec(c.scale.pos),
+    scale_rot_deg: vec(c.scale.rot),
+    scale_size: sceneSize(c.scale.size),
+
+    sink_pose: vec(c.sink.pos),
+    sink_rot_deg: vec(c.sink.rot),
+    sink_size: sceneSize(c.sink.size),
+
+    boxes_pos: vec(c.boxes.pos),
+    boxes_rot_deg: vec(c.boxes.rot),
+    boxes_size: sceneSize(c.boxes.size),
+    boxes_random_size: !!c.boxes.randomSize,
+    boxes_min: sceneSize(c.boxes.min),
+    boxes_max: sceneSize(c.boxes.max),
+    spawn_interval: c.boxes.spawnEvery,
+
+    labels_show: !!c.labels.show,
+    paused,
+    config_seq: configSeq,
+    spawn_seq: spawnSeq,
+    reset_seq: resetSeq,
+    box_overrides: options.boxOverrides ?? [],
+  };
+}
+
+async function sendConfigBody(body) {
+  try {
+    const response = await fetch(`${bridgeBase}/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    document.getElementById('sourceValue').textContent = 'sim';
+  } catch (err) {
+    console.warn('[sim] config publish failed', err);
+    document.getElementById('sourceValue').textContent = 'sim offline';
+  }
+}
+
+function scheduleConfigRetry() {
+  clearTimeout(configRetryTimer);
+  configRetryTimer = setTimeout(() => {
+    if (pendingConfigSeq && lastConfigBody) void sendConfigBody(lastConfigBody);
+    if (pendingConfigSeq) scheduleConfigRetry();
+  }, 1000);
+}
+
+function publishConfig(options = {}) {
+  if (sourceMode === 'local') return;
+  configSeq += 1;
+  pendingConfigSeq = configSeq;
+  lastConfigBody = JSON.stringify(sceneConfigFromEditor(options));
+  void sendConfigBody(lastConfigBody);
+  scheduleConfigRetry(); // retry until the sim echoes this config_seq
+}
+
+function onConfigChanged(full = '') {
   saveCurrentConfig();
+  // Labels are viewer-only (not in SceneConfig), so keep them local.
+  if (sourceMode === 'local' || full.startsWith('labels.')) applyConfig();
+  else void publishConfig();
+}
+
+function setPaused(value) {
+  paused = !!value;
+  document.getElementById('btnPause').textContent = paused ? 'Resume' : 'Pause';
+}
+
+function applySceneConfig(sc) {
+  if (!sc) return;
+  config.conveyor.pos = vec(sc.conveyor_pos ?? config.conveyor.pos);
+  config.conveyor.rot = vec(sc.conveyor_rot_deg ?? config.conveyor.rot);
+  config.conveyor.size = sc.conveyor_size ? sizeFromVec(sc.conveyor_size) : copySize(config.conveyor.size);
+  config.conveyor.speed = sc.conveyor_speed ?? config.conveyor.speed;
+
+  config.camera.pos = vec(sc.camera_pose ?? config.camera.pos);
+  config.camera.rot = vec(sc.camera_rot_deg ?? config.camera.rot);
+  config.camera.size = sc.camera_size ? sizeFromVec(sc.camera_size) : copySize(config.camera.size);
+  config.camera.fovAlong = sc.fov_y_m ?? config.camera.fovAlong;
+  config.camera.fovAcross = sc.fov_x_m ?? config.camera.fovAcross;
+  config.camera.distance = sc.fov_distance ?? config.camera.distance;
+
+  config.scale.pos = vec(sc.scale_pose ?? config.scale.pos);
+  config.scale.rot = vec(sc.scale_rot_deg ?? config.scale.rot);
+  config.scale.size = sc.scale_size ? sizeFromVec(sc.scale_size) : copySize(config.scale.size);
+
+  config.sink.pos = vec(sc.sink_pose ?? config.sink.pos);
+  config.sink.rot = vec(sc.sink_rot_deg ?? config.sink.rot);
+  config.sink.size = sc.sink_size ? sizeFromVec(sc.sink_size) : copySize(config.sink.size);
+
+  config.boxes.pos = vec(sc.boxes_pos ?? config.boxes.pos);
+  config.boxes.rot = vec(sc.boxes_rot_deg ?? config.boxes.rot);
+  config.boxes.size = sc.boxes_size ? sizeFromVec(sc.boxes_size) : copySize(config.boxes.size);
+  config.boxes.randomSize = sc.boxes_random_size ?? config.boxes.randomSize;
+  config.boxes.min = sc.boxes_min ? sizeFromVec(sc.boxes_min) : copySize(config.boxes.min);
+  config.boxes.max = sc.boxes_max ? sizeFromVec(sc.boxes_max) : copySize(config.boxes.max);
+  config.boxes.spawnEvery = sc.spawn_interval ?? config.boxes.spawnEvery;
+
+  config.labels.show = sc.labels_show ?? config.labels.show;
+  applyConfig();
+}
+
+function syncBoxes(simBoxes) {
+  const incoming = Array.isArray(simBoxes) ? simBoxes : [];
+  const seen = new Set();
+
+  for (const sb of incoming) {
+    const id = Number(sb.id);
+    if (!Number.isFinite(id)) continue;
+    seen.add(id);
+
+    const pose = vec(sb.pose);
+    const rot = vec(sb.rot_deg);
+    const size = sizeFromVec(sb.size);
+    let rec = boxes.find((b) => b.id === id);
+
+    if (!rec) {
+      const material = new THREE.MeshStandardMaterial({
+        color: palette[id % palette.length],
+        roughness: 0.72,
+        metalness: 0.05,
+      });
+      const mesh = makeBox(size, pose, rot, material, boxEdgeMat);
+      mesh.userData.objectKey = `box:${id}`;
+      rec = { id, mesh, l: size.l, w: size.w, h: size.h, weight: 0, vz: 0 };
+      mesh.userData.boxRecord = rec;
+      boxes.push(rec);
+      nextBoxId = Math.max(nextBoxId, id + 1);
+    }
+
+    rec.mesh.position.set(pose.x, pose.y, pose.z);
+    rec.mesh.rotation.set(deg(rot.x), deg(rot.y), deg(rot.z));
+    rec.mesh.scale.set(size.w, size.l, size.h);
+    rec.l = size.l;
+    rec.w = size.w;
+    rec.h = size.h;
+    rec.weight = Number.isFinite(sb.weight_kg) ? sb.weight_kg : weightFor(size.l, size.w, size.h);
+    if (boxWeightEl && selectedKey === `box:${id}`) {
+      boxWeightEl.textContent = `weight: ${rec.weight.toFixed(1)} kg`;
+    }
+  }
+
+  for (let i = boxes.length - 1; i >= 0; i--) {
+    if (!seen.has(boxes[i].id)) {
+      disposeBox(boxes[i]);
+      boxes.splice(i, 1);
+    }
+  }
+  maybeRefreshTree();
+}
+
+function applySnapshot(snapshot) {
+  const sSeq = snapshot.config?.config_seq ?? 0;
+  if (pendingConfigSeq && sSeq < pendingConfigSeq) return; // wait for our edit to round-trip
+  if (pendingConfigSeq) {
+    clearTimeout(configRetryTimer);
+    configRetryTimer = null;
+    pendingConfigSeq = 0;
+  }
+
+  applySceneConfig(snapshot.config);
+  syncBoxes(snapshot.boxes);
+
+  const kg = Number.isFinite(snapshot.scale_kg) ? snapshot.scale_kg : 0;
+  const text = kg > 0 ? `${kg.toFixed(1)} kg` : '--- kg';
+  scaleLabel.userData.setText(text);
+  document.getElementById('scaleValue').textContent = text;
+
+  const simPaused = !!snapshot.config?.paused;
+  if (lastBeltStamp !== null && !simPaused) {
+    const elapsed = Math.max(0, snapshot.stamp_sec - lastBeltStamp);
+    beltTexture.offset.x = (beltTexture.offset.x + (elapsed * snapshot.conveyor_speed) / 0.25) % 1;
+  }
+  lastBeltStamp = snapshot.stamp_sec;
+  setPaused(simPaused);
+  document.getElementById('count').textContent = String(boxes.length);
 }
 
 let uiRefs = {};
@@ -523,6 +744,22 @@ function makeBoxConfig(rec) {
   };
 }
 
+function commitBoxConfig(rec, bc) {
+  if (sourceMode === 'local') {
+    applyBoxConfig(rec, bc);
+    return;
+  }
+  void publishConfig({
+    boxOverrides: [{
+      id: rec.id,
+      pose: vec(bc.pos),
+      rot_deg: vec(bc.rot),
+      size: { x: bc.size.w, y: bc.size.l, z: bc.size.h },
+      weight_kg: rec.weight,
+    }],
+  });
+}
+
 function applyBoxConfig(rec, bc) {
   rec.mesh.position.set(bc.pos.x, bc.pos.y, bc.pos.z);
   rec.mesh.rotation.set(deg(bc.rot.x), deg(bc.rot.y), deg(bc.rot.z));
@@ -592,7 +829,7 @@ function rebuildSidebar() {
       return;
     }
     const bc = makeBoxConfig(rec);
-    addSection(sidebar, selectedKey, bc, baseFields, () => applyBoxConfig(rec, bc));
+    addSection(sidebar, selectedKey, bc, baseFields, () => commitBoxConfig(rec, bc));
     boxWeightEl = document.createElement('div');
     boxWeightEl.className = 'check';
     boxWeightEl.textContent = `weight: ${rec.weight.toFixed(1)} kg`;
@@ -600,7 +837,7 @@ function rebuildSidebar() {
     return;
   }
 
-  addSection(sidebar, selectedKey, config[selectedKey], fieldDefs[selectedKey], () => applyConfig());
+  addSection(sidebar, selectedKey, config[selectedKey], fieldDefs[selectedKey], onConfigChanged);
 }
 
 function maybeRefreshTree() {
@@ -752,17 +989,29 @@ function renderPip() {
 // ---------------------------------------------------------------------------
 // Controls / animation
 // ---------------------------------------------------------------------------
-let paused = false;
 let spawnTimer = 0;
 let last = performance.now();
 
+function requestSpawn() {
+  if (sourceMode === 'local') {
+    spawnBox();
+    return;
+  }
+  spawnSeq += 1;
+  void publishConfig();
+}
+
 function togglePause() {
-  paused = !paused;
-  document.getElementById('btnPause').textContent = paused ? 'Resume' : 'Pause';
+  if (sourceMode === 'zenoh') {
+    setPaused(!paused);
+    void publishConfig();
+    return;
+  }
+  setPaused(!paused);
 }
 
 document.getElementById('btnPause').addEventListener('click', togglePause);
-document.getElementById('btnSpawn').addEventListener('click', () => spawnBox());
+document.getElementById('btnSpawn').addEventListener('click', requestSpawn);
 
 // Reset: short press restores the saved defaults; holding for 3 s makes the
 // current values the new defaults.
@@ -790,7 +1039,13 @@ function resetToDefaults() {
   applyConfig();
   while (boxes.length) disposeBox(boxes.pop());
   spawnTimer = 0;
-  updateScale();
+  if (sourceMode === 'local') {
+    updateScale();
+  } else {
+    resetSeq += 1;
+    nextBoxId = 1;
+    void publishConfig();
+  }
   rebuildSidebar();
 }
 
@@ -843,7 +1098,7 @@ document.getElementById('btnZoomOut').addEventListener('click', () => zoomBy(1.1
 
 window.addEventListener('keydown', (event) => {
   if (event.code === 'Space') { event.preventDefault(); togglePause(); }
-  if (event.key === 's' || event.key === 'S') spawnBox();
+  if (event.key === 's' || event.key === 'S') requestSpawn();
   if (event.key === '+' || event.key === '=' || event.code === 'PageUp') {
     event.preventDefault();
     zoomBy(0.85);
@@ -860,45 +1115,77 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
+function startSceneStream() {
+  const sourceValue = document.getElementById('sourceValue');
+  if (sourceMode === 'local') {
+    sourceValue.textContent = 'local';
+    return;
+  }
+
+  sourceValue.textContent = 'connecting…';
+  const stream = new EventSource(`${bridgeBase}/scene`);
+  stream.onopen = () => {
+    sourceValue.textContent = 'sim';
+    void publishConfig();
+  };
+  stream.onmessage = (event) => {
+    try {
+      applySnapshot(JSON.parse(event.data));
+    } catch (err) {
+      console.warn('[sim] bad snapshot', err);
+    }
+  };
+  stream.onerror = () => {
+    sourceValue.textContent = 'sim offline';
+  };
+}
+
 applyConfig();
 rebuildSidebar();
-spawnBox();
-boxes[0].mesh.position.y = 1.1;
+if (sourceMode === 'local') {
+  spawnBox();
+  boxes[0].mesh.position.y = 1.1;
+  updateScale();
+}
+startSceneStream();
 
 function animate(now) {
   requestAnimationFrame(animate);
-  const dt = Math.min((now - last) / 1000, 0.05);
-  last = now;
 
-  if (!paused) {
-    spawnTimer += dt;
-    if (spawnTimer >= config.boxes.spawnEvery) {
-      spawnTimer -= config.boxes.spawnEvery;
-      spawnBox();
-    }
+  if (sourceMode === 'local') {
+    const dt = Math.min((now - last) / 1000, 0.05);
+    last = now;
 
-    beltTexture.offset.x = (beltTexture.offset.x + (dt * config.conveyor.speed) / 0.25) % 1;
-
-    const endY = config.conveyor.pos.y + config.conveyor.size.l / 2;
-    for (const b of boxes) {
-      if (b.mesh.position.y <= endY) {
-        b.mesh.position.y += config.conveyor.speed * dt;
-      } else {
-        b.vz -= 9.81 * dt;
-        b.mesh.position.z += b.vz * dt;
-        b.mesh.rotation.z += dt * 0.8;
+    if (!paused) {
+      spawnTimer += dt;
+      if (spawnTimer >= config.boxes.spawnEvery) {
+        spawnTimer -= config.boxes.spawnEvery;
+        spawnBox();
       }
-    }
 
-    for (let i = boxes.length - 1; i >= 0; i--) {
-      if (boxes[i].mesh.position.z < -0.65) {
-        disposeBox(boxes[i]);
-        boxes.splice(i, 1);
+      beltTexture.offset.x = (beltTexture.offset.x + (dt * config.conveyor.speed) / 0.25) % 1;
+
+      const endY = config.conveyor.pos.y + config.conveyor.size.l / 2;
+      for (const b of boxes) {
+        if (b.mesh.position.y <= endY) {
+          b.mesh.position.y += config.conveyor.speed * dt;
+        } else {
+          b.vz -= 9.81 * dt;
+          b.mesh.position.z += b.vz * dt;
+          b.mesh.rotation.z += dt * 0.8;
+        }
       }
-    }
 
-    updateScale();
-    maybeRefreshTree();
+      for (let i = boxes.length - 1; i >= 0; i--) {
+        if (boxes[i].mesh.position.z < -0.65) {
+          disposeBox(boxes[i]);
+          boxes.splice(i, 1);
+        }
+      }
+
+      updateScale();
+      maybeRefreshTree();
+    }
   }
 
   if (selectedObj && selectionBox.visible) {

@@ -9,5 +9,6 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /build/target/release/hiroz-conveyor /usr/local/bin/hiroz-conveyor
+EXPOSE 8765
 ENTRYPOINT ["hiroz-conveyor"]
 CMD ["sim"]
