@@ -52,8 +52,9 @@ its name, pose, FOV, and OCR trigger (`trigger at`, `trig offset m`); the name
 appears in the tree and PiP dropdown. Use the dropdown above the PiP view to
 switch the live view, or press **+ CAM** (also available as **+ add camera** in
 the tree) to add another camera. The default pair shares the same pose: CAM 1
-looks down, CAM 2 is the same point pitched 90° down the belt to see box sides.
-CAM 1 has its trigger off; CAM 2 triggers at each box's `middle`.
+looks down, CAM 2 is tilted 25° down toward the belt so a box at the trigger
+line is still in front of the camera. CAM 1 has its trigger off; CAM 2 triggers
+at each box's `middle`.
 
 The PiP **LIVE / TRIGGER** button toggles between the selected camera's live
 view and the latest cropped trigger image. In trigger mode the ↗ button opens

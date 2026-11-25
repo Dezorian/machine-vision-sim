@@ -81,12 +81,12 @@ selected box's pose/size edit. `cameras` is the authoritative editable camera
 list; the classic `camera`/`camera_*` fields mirror `cameras[0]`, and a config
 without `cameras` gets one synthesized from those fields. The default list has
 a top-down camera (id 1, `TOP`) and a side camera (id 2, `SIDE`) at the same
-pose, pitched 90° down the belt. Names are editable in the sidebar; empty names
-get a `CAM <id>` fallback in the sim.
+pose, tilted 25° down toward the belt. Names are editable in the sidebar; empty
+names get a `CAM <id>` fallback in the sim.
 
 ### Labels and triggers
 
-Spawned boxes carry `label_side` (`0=+X`, `1=-X`, `2=+Y`, `3=-Y`+X`, `1=-X`, `2=+Y`, `3=-Y`; never
+Spawned boxes carry `label_side` (`0=+X`, `1=-X`, `2=+Y`, `3=-Y`; never
 top/bottom), a deterministic `label_seed` used by the browser for blur/skew, and
 the printed `country_code`, `barcode`, and `order_number`. Without
 `--labels-file`, the sim generates these from its RNG. With it, each line is

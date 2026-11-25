@@ -83,9 +83,10 @@ const config = {
     // Top view: local -Z points down world -Z.
     makeCamera(1, 'TOP', { x: 0, y: 2.0, z: 1.0 }, { x: 0, y: 0, z: 0 }, 0.60, 0.40,
       undefined, { anchor: 'off', offset: 0 }),
-    // Side view: same point, pitched 90 degrees down the belt. FOV Y is now
-    // vertical (world Z) and FOV X stays across the belt (world X).
-    makeCamera(2, 'SIDE', { x: 0, y: 2.0, z: 1.0 }, { x: 90, y: 0, z: 0 }, 1.60, 0.60,
+    // Side view: same point, tilted down toward the belt. This looks far
+    // enough along +Y that a box at the trigger line is still in front of the
+    // camera and its label can be cropped.
+    makeCamera(2, 'SIDE', { x: 0, y: 2.0, z: 1.0 }, { x: 25, y: 0, z: 0 }, 1.60, 0.60,
       undefined, { anchor: 'middle', offset: 0 }),
   ],
   scale: {
@@ -210,6 +211,21 @@ function migrateCameraTriggers(target) {
   }
 }
 
+// The old SIDE camera looked exactly along +Y, so a box at the trigger line sat
+// in the camera plane and no crop could be produced. Tilt the stock SIDE camera
+// down toward the belt; leave deliberately custom angles alone.
+function migrateSideCameraView(target) {
+  for (const cam of target.cameras || []) {
+    const isSide = cam.id === 2 || String(cam.name ?? '').trim().toUpperCase() === 'SIDE';
+    if (!isSide || !cam.rot) continue;
+    if (Math.abs(Number(cam.rot.x) - 90) < 1e-6
+      && Math.abs(Number(cam.rot.y) || 0) < 1e-6
+      && Math.abs(Number(cam.rot.z) || 0) < 1e-6) {
+      cam.rot.x = 25;
+    }
+  }
+}
+
 const FACTORY_CONFIG = cloneConfig(config);
 let defaults = cloneConfig(FACTORY_CONFIG);
 const storedDefaults = readStored(STORAGE_KEYS.defaults);
@@ -217,10 +233,12 @@ const storedCurrent = readStored(STORAGE_KEYS.current);
 mergeConfig(defaults, storedDefaults);
 migrateLegacyCamera(defaults, storedDefaults);
 migrateCameraTriggers(defaults);
+migrateSideCameraView(defaults);
 mergeConfig(config, defaults);
 mergeConfig(config, storedCurrent);
 migrateLegacyCamera(config, storedCurrent);
 migrateCameraTriggers(config);
+migrateSideCameraView(config);
 
 function saveCurrentConfig() {
   writeStored(STORAGE_KEYS.current, config);
@@ -1625,8 +1643,9 @@ async function captureTrigger(cam, rec, triggerY) {
   let payload = null;
   try {
     renderPipFor(cam);
-    const center = projectToPixels(labelFacePoint(rec), cam);
-    const size = projectedBoxSize(rec, cam);
+    // renderPipFor() configures demoCam; the plain config camera has no matrices.
+    const center = projectToPixels(labelFacePoint(rec), demoCam);
+    const size = projectedBoxSize(rec, demoCam);
     if (center.behind || size.w <= 0 || size.h <= 0) return;
 
     const cropW = Math.round(THREE.MathUtils.clamp(size.w * 0.85, 64, pipCanvas.width));
@@ -1847,6 +1866,7 @@ function applyLoadedSetup(parsed) {
   }
   replaceConfig(config, source);
   migrateCameraTriggers(config);
+  migrateSideCameraView(config);
   const requestedId = Number(parsed?.active_camera_id);
   activeCameraId = cameraById(requestedId) ? requestedId : firstCamera().id;
 

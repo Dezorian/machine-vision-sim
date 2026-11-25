@@ -320,13 +320,13 @@ fn default_config(speed: f64, spawn_interval: f64) -> SceneConfig {
         trigger_anchor: "off".to_string(),
         trigger_offset: 0.0,
     };
-    // Same point as the top camera, pitched 90 degrees down the belt so it
-    // sees the sides of boxes as they travel toward the sink.
+    // Same point as the top camera, tilted down toward the belt. A box at the
+    // trigger line stays in front of the camera, so its label can be cropped.
     let side = CameraConfig {
         id: 2,
         name: "SIDE".to_string(),
         pose: top.pose.clone(),
-        rot_deg: Vec3 { x: 90.0, y: 0.0, z: 0.0 },
+        rot_deg: Vec3 { x: 25.0, y: 0.0, z: 0.0 },
         size: top.size.clone(),
         fov_y_m: 1.60,
         fov_x_m: 0.60,
