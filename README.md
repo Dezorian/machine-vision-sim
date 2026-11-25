@@ -204,4 +204,3 @@ every snapshot and renders at roughly one frame per display refresh, Compose
 runs the sim at 60 Hz -- one update per typical frame -- as the practical
 no-interpolation setting. Optionally, `sensor_msgs/Image` / `CameraInfo` could
 later drive the PiP view.
-
