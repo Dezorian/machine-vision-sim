@@ -12,6 +12,7 @@ const sourceMode = params.get('source') === 'local' ? 'local' : 'zenoh';
 const bridgeBase = params.get('bridge') || `${location.protocol === 'https:' ? 'https' : 'http'}://${location.hostname}:8765`;
 
 let paused = false;
+let activeCameraId = 1;
 let configSeq = 0;
 let spawnSeq = 0;
 let resetSeq = 0;
@@ -29,6 +30,28 @@ const sizeFromVec = (v) => ({ l: vec(v).y, w: vec(v).x, h: vec(v).z });
 const copySize = (s) => ({ l: s.l, w: s.w, h: s.h });
 const sceneSize = (s) => ({ x: s.w, y: s.l, z: s.h });
 
+function makeCamera(id, pos, rot, fovAlong, fovAcross, size = { l: 0.14, w: 0.14, h: 0.08 }) {
+  return {
+    id,
+    pos: { ...vec(pos) },
+    rot: { ...vec(rot) },
+    size: copySize(size),
+    fovAlong,
+    fovAcross,
+    distance: 1.0,
+  };
+}
+
+function cloneCamera(cam) {
+  return JSON.parse(JSON.stringify(cam));
+}
+
+function cameraLabel(cam) {
+  if (cam.id === 1) return 'CAM 1 · TOP';
+  if (cam.id === 2) return 'CAM 2 · SIDE';
+  return `CAM ${cam.id}`;
+}
+
 // ---------------------------------------------------------------------------
 // Coordinate system:
 //   X = across belt, Y = transport direction (0 -> 4 m), Z = up.
@@ -41,14 +64,13 @@ const config = {
     size: { l: 4.0, w: 0.60, h: 0.06 },
     speed: 0.5,
   },
-  camera: {
-    pos: { x: 0, y: 2.0, z: 1.0 },
-    rot: { x: 0, y: 0, z: 0 }, // local -Z already points down world -Z
-    size: { l: 0.14, w: 0.14, h: 0.08 },
-    fovAlong: 0.60,  // footprint along Y (transport)
-    fovAcross: 0.40, // footprint along X (across belt)
-    distance: 1.0,
-  },
+  cameras: [
+    // Top view: local -Z points down world -Z.
+    makeCamera(1, { x: 0, y: 2.0, z: 1.0 }, { x: 0, y: 0, z: 0 }, 0.60, 0.40),
+    // Side view: same point, pitched 90 degrees down the belt. FOV Y is now
+    // vertical (world Z) and FOV X stays across the belt (world X).
+    makeCamera(2, { x: 0, y: 2.0, z: 1.0 }, { x: 90, y: 0, z: 0 }, 1.60, 0.60),
+  ],
   scale: {
     pos: { x: 0, y: 2.60, z: 0.01 },
     rot: { x: 0, y: 0, z: 0 },
@@ -117,7 +139,9 @@ function mergeConfig(target, source) {
       const srcValue = srcSection[key];
       if (srcValue === undefined) continue;
       const targetValue = target[section][key];
-      if (targetValue && typeof targetValue === 'object' && !Array.isArray(targetValue)) {
+      if (Array.isArray(srcValue)) {
+        target[section][key] = cloneConfig(srcValue);
+      } else if (targetValue && typeof targetValue === 'object') {
         Object.assign(targetValue, srcValue);
       } else {
         target[section][key] = srcValue;
@@ -127,11 +151,30 @@ function mergeConfig(target, source) {
   return target;
 }
 
+function migrateLegacyCamera(target, stored) {
+  if (!stored?.camera || stored?.cameras || !target.cameras?.length) return;
+  const legacy = stored.camera;
+  const first = target.cameras[0];
+  target.cameras[0] = {
+    ...first,
+    pos: { ...vec(legacy.pos) },
+    rot: { ...vec(legacy.rot) },
+    size: legacy.size ? copySize(legacy.size) : copySize(first.size),
+    fovAlong: legacy.fovAlong ?? first.fovAlong,
+    fovAcross: legacy.fovAcross ?? first.fovAcross,
+    distance: legacy.distance ?? first.distance,
+  };
+}
+
 const FACTORY_CONFIG = cloneConfig(config);
 let defaults = cloneConfig(FACTORY_CONFIG);
-mergeConfig(defaults, readStored(STORAGE_KEYS.defaults));
+const storedDefaults = readStored(STORAGE_KEYS.defaults);
+const storedCurrent = readStored(STORAGE_KEYS.current);
+mergeConfig(defaults, storedDefaults);
+migrateLegacyCamera(defaults, storedDefaults);
 mergeConfig(config, defaults);
-mergeConfig(config, readStored(STORAGE_KEYS.current));
+mergeConfig(config, storedCurrent);
+migrateLegacyCamera(config, storedCurrent);
 
 function saveCurrentConfig() {
   writeStored(STORAGE_KEYS.current, config);
@@ -140,6 +183,45 @@ function saveCurrentConfig() {
 function saveDefaultsFromCurrent() {
   defaults = cloneConfig(config);
   writeStored(STORAGE_KEYS.defaults, defaults);
+}
+
+function firstCamera() {
+  if (!Array.isArray(config.cameras) || !config.cameras.length) {
+    config.cameras = [makeCamera(1, { x: 0, y: 2, z: 1 }, { x: 0, y: 0, z: 0 }, 0.60, 0.40)];
+  }
+  return config.cameras[0];
+}
+
+function cameraById(id) {
+  return config.cameras?.find((cam) => cam.id === id) || null;
+}
+
+function selectedCamera() {
+  return cameraById(activeCameraId) || firstCamera();
+}
+
+let cameraControlSignature = '';
+
+function refreshCameraControls(force = false) {
+  const select = document.getElementById('pipCamera');
+  if (!select) return;
+  const cam = selectedCamera();
+  const title = document.getElementById('pipTitle');
+  const titleText = `${cameraLabel(cam)} · live view`;
+  if (title && title.textContent !== titleText) title.textContent = titleText;
+
+  const signature = config.cameras.map((entry) => `${entry.id}:${cameraLabel(entry)}`).join(',');
+  if (force || signature !== cameraControlSignature) {
+    select.innerHTML = '';
+    for (const entry of config.cameras) {
+      const option = document.createElement('option');
+      option.value = String(entry.id);
+      option.textContent = cameraLabel(entry);
+      select.appendChild(option);
+    }
+    cameraControlSignature = signature;
+  }
+  if (select.value !== String(cam.id)) select.value = String(cam.id);
 }
 
 // ---------------------------------------------------------------------------
@@ -298,23 +380,53 @@ const rollers = [new THREE.Mesh(rollerGeo, rollerMat), new THREE.Mesh(rollerGeo,
 rollers.forEach((r) => { r.rotation.z = Math.PI / 2; conveyorGroup.add(r); }); // axis along X
 
 // ---------------------------------------------------------------------------
-// Camera rig + FOV camera
+// Camera rigs + PiP camera
 // ---------------------------------------------------------------------------
-const cameraRig = new THREE.Group();
-cameraRig.userData.objectKey = 'camera';
-scene.add(cameraRig);
+const cameraRigs = new Map();
 const rigMat = new THREE.MeshStandardMaterial({ color: 0x2f3b46, roughness: 0.6, metalness: 0.3 });
-const camBody = makeBox(config.camera.size, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, rigMat, boxEdgeMat, cameraRig);
-const camLens = new THREE.Mesh(
-  new THREE.CylinderGeometry(0.035, 0.05, 0.09, 16),
-  new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.4 })
-);
-camLens.rotation.x = Math.PI / 2; // cylinder axis -> Z
-cameraRig.add(camLens);
-const pole = makeBox({ l: 0.05, w: 0.05, h: 1 }, { x: 0.36, y: 0, z: -0.5 }, { x: 0, y: 0, z: 0 }, rigMat, null, cameraRig);
-const arm = makeBox({ l: 0.05, w: 0.36, h: 0.05 }, { x: 0.18, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, rigMat, null, cameraRig);
+const lensGeo = new THREE.CylinderGeometry(0.035, 0.05, 0.09, 16);
+const lensMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.4 });
 
-const demoCam = new THREE.PerspectiveCamera(33.4, 0.667, 0.02, 1.5);
+function makeCameraRig(cam) {
+  const group = new THREE.Group();
+  group.userData.objectKey = `camera:${cam.id}`;
+  const body = makeBox(cam.size, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, rigMat, boxEdgeMat, group);
+  const lens = new THREE.Mesh(lensGeo, lensMat);
+  lens.rotation.x = Math.PI / 2; // cylinder axis -> Z
+  group.add(lens);
+  const pole = makeBox({ l: 0.05, w: 0.05, h: 1 }, { x: 0.36, y: 0, z: -0.5 }, { x: 0, y: 0, z: 0 }, rigMat, null, group);
+  const arm = makeBox({ l: 0.05, w: 0.36, h: 0.05 }, { x: 0.18, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, rigMat, null, group);
+  scene.add(group);
+  const rig = { group, body, lens, pole, arm };
+  cameraRigs.set(cam.id, rig);
+  return rig;
+}
+
+function updateCameraRig(rig, cam) {
+  rig.group.position.set(cam.pos.x, cam.pos.y, cam.pos.z);
+  rig.group.rotation.set(deg(cam.rot.x), deg(cam.rot.y), deg(cam.rot.z));
+  rig.body.scale.set(cam.size.w, cam.size.l, cam.size.h);
+  rig.lens.position.set(0, 0, -cam.size.h * 0.6);
+  rig.pole.scale.set(0.05, 0.05, Math.max(0.05, cam.pos.z));
+  rig.pole.position.set(0.36, 0, -cam.pos.z / 2);
+  rig.arm.position.set(0.18, 0, cam.size.h / 2);
+  rig.arm.scale.set(0.36, 0.05, 0.05);
+}
+
+function syncCameraRigs() {
+  const ids = new Set(config.cameras.map((cam) => cam.id));
+  for (const [id, rig] of cameraRigs) {
+    if (!ids.has(id)) {
+      scene.remove(rig.group);
+      cameraRigs.delete(id);
+    }
+  }
+  for (const cam of config.cameras) {
+    updateCameraRig(cameraRigs.get(cam.id) || makeCameraRig(cam), cam);
+  }
+}
+
+const demoCam = new THREE.PerspectiveCamera(33.4, 0.667, 0.02, 8);
 const camHelper = new THREE.CameraHelper(demoCam);
 scene.add(camHelper);
 
@@ -356,14 +468,15 @@ scene.add(selectionBox);
 // Apply config to the scene
 // ---------------------------------------------------------------------------
 function updateFootprint() {
-  const e = new THREE.Euler(deg(config.camera.rot.x), deg(config.camera.rot.y), deg(config.camera.rot.z));
+  const cam = selectedCamera();
+  const e = new THREE.Euler(deg(cam.rot.x), deg(cam.rot.y), deg(cam.rot.z));
   const forward = new THREE.Vector3(0, 0, -1).applyEuler(e).normalize();
   const right = new THREE.Vector3(1, 0, 0).applyEuler(e).normalize();
   const up = new THREE.Vector3(0, 1, 0).applyEuler(e).normalize();
-  const center = new THREE.Vector3(config.camera.pos.x, config.camera.pos.y, config.camera.pos.z)
-    .addScaledVector(forward, config.camera.distance);
-  const hw = config.camera.fovAcross / 2; // X
-  const hh = config.camera.fovAlong / 2;  // Y
+  const center = new THREE.Vector3(cam.pos.x, cam.pos.y, cam.pos.z)
+    .addScaledVector(forward, Math.max(0.01, cam.distance));
+  const hw = Math.max(0.01, cam.fovAcross) / 2; // camera-local X
+  const hh = Math.max(0.01, cam.fovAlong) / 2;  // camera-local Y
   const pts = [
     center.clone().addScaledVector(right, -hw).addScaledVector(up, -hh),
     center.clone().addScaledVector(right, hw).addScaledVector(up, -hh),
@@ -397,22 +510,21 @@ function applyConfig() {
     roller.scale.y = cw;
   });
 
-  // Camera rig + FOV camera
-  cameraRig.position.set(c.camera.pos.x, c.camera.pos.y, c.camera.pos.z);
-  camBody.scale.set(c.camera.size.w, c.camera.size.l, c.camera.size.h);
-  camLens.position.set(0, 0, -c.camera.size.h * 0.6);
-  pole.scale.set(0.05, 0.05, Math.max(0.05, c.camera.pos.z));
-  pole.position.set(0.36, 0, -c.camera.pos.z / 2);
-  arm.position.set(0.18, 0, c.camera.size.h / 2);
-  arm.scale.set(0.36, 0.05, 0.05);
+  // Camera rigs + PiP camera
+  firstCamera();
+  syncCameraRigs();
+  if (!cameraById(activeCameraId)) activeCameraId = firstCamera().id;
+  const cam = selectedCamera();
+  const distance = Math.max(0.01, cam.distance);
+  const along = Math.max(0.01, cam.fovAlong);
+  const across = Math.max(0.01, cam.fovAcross);
 
-  demoCam.position.set(c.camera.pos.x, c.camera.pos.y, c.camera.pos.z);
-  demoCam.rotation.set(deg(c.camera.rot.x), deg(c.camera.rot.y), deg(c.camera.rot.z));
-  const vFov = 2 * Math.atan((c.camera.fovAlong / 2) / c.camera.distance);
-  demoCam.fov = rad(vFov);
-  demoCam.aspect = c.camera.fovAcross / c.camera.fovAlong;
+  demoCam.position.set(cam.pos.x, cam.pos.y, cam.pos.z);
+  demoCam.rotation.set(deg(cam.rot.x), deg(cam.rot.y), deg(cam.rot.z));
+  demoCam.fov = rad(2 * Math.atan((along / 2) / distance));
+  demoCam.aspect = across / along;
   demoCam.near = 0.02;
-  demoCam.far = c.camera.distance * 1.25 + 0.25;
+  demoCam.far = Math.max(distance * 1.25 + 0.25, c.conveyor.size.l + 1.0);
   demoCam.updateProjectionMatrix();
   demoCam.updateMatrixWorld(true);
   camHelper.update();
@@ -448,7 +560,9 @@ function applyConfig() {
 
   document.getElementById('speedValue').textContent = `${c.conveyor.speed.toFixed(2)} m/s`;
   document.getElementById('fovValue').textContent =
-    `${c.camera.fovAlong.toFixed(2)} × ${c.camera.fovAcross.toFixed(2)} m`;
+    `${cam.fovAlong.toFixed(2)} × ${cam.fovAcross.toFixed(2)} m`;
+  refreshCameraControls();
+  maybeRefreshTree();
   // Persistence is handled by the editor/sim commit path, not by every snapshot.
 }
 
@@ -457,18 +571,28 @@ function applyConfig() {
 // ---------------------------------------------------------------------------
 function sceneConfigFromEditor(options = {}) {
   const c = config;
+  const primary = firstCamera();
   return {
     conveyor_pos: vec(c.conveyor.pos),
     conveyor_rot_deg: vec(c.conveyor.rot),
     conveyor_size: sceneSize(c.conveyor.size), // x = W, y = L, z = H
     conveyor_speed: c.conveyor.speed,
 
-    camera_pose: vec(c.camera.pos),
-    camera_rot_deg: vec(c.camera.rot),
-    camera_size: sceneSize(c.camera.size),
-    fov_y_m: c.camera.fovAlong,
-    fov_x_m: c.camera.fovAcross,
-    fov_distance: c.camera.distance,
+    camera_pose: vec(primary.pos),
+    camera_rot_deg: vec(primary.rot),
+    camera_size: sceneSize(primary.size),
+    fov_y_m: primary.fovAlong,
+    fov_x_m: primary.fovAcross,
+    fov_distance: primary.distance,
+    cameras: c.cameras.map((cam) => ({
+      id: cam.id,
+      pose: vec(cam.pos),
+      rot_deg: vec(cam.rot),
+      size: sceneSize(cam.size),
+      fov_y_m: cam.fovAlong,
+      fov_x_m: cam.fovAcross,
+      fov_distance: cam.distance,
+    })),
 
     scale_pose: vec(c.scale.pos),
     scale_rot_deg: vec(c.scale.rot),
@@ -539,6 +663,48 @@ function setPaused(value) {
   document.getElementById('btnPause').textContent = paused ? 'Resume' : 'Pause';
 }
 
+function applyCameraConfig(cam, wire) {
+  const pos = vec(wire.pose ?? wire.pos ?? cam.pos);
+  cam.pos.x = pos.x; cam.pos.y = pos.y; cam.pos.z = pos.z;
+  const rot = vec(wire.rot_deg ?? wire.rot ?? cam.rot);
+  cam.rot.x = rot.x; cam.rot.y = rot.y; cam.rot.z = rot.z;
+  const size = wire.size ? sizeFromVec(wire.size) : copySize(cam.size);
+  cam.size.l = size.l; cam.size.w = size.w; cam.size.h = size.h;
+  cam.fovAlong = wire.fov_y_m ?? wire.fovAlong ?? cam.fovAlong;
+  cam.fovAcross = wire.fov_x_m ?? wire.fovAcross ?? cam.fovAcross;
+  cam.distance = wire.fov_distance ?? wire.distance ?? cam.distance;
+}
+
+// Update camera objects in place so any open sidebar inputs stay bound to them.
+function applyCamerasFromWire(wireCameras, sc) {
+  const incoming = Array.isArray(wireCameras) ? wireCameras : [];
+  if (!incoming.length) {
+    applyCameraConfig(firstCamera(), sc);
+    return;
+  }
+
+  const existing = new Map(config.cameras.map((cam) => [cam.id, cam]));
+  const usedIds = new Set();
+  const next = [];
+  for (const wire of incoming) {
+    let id = Number(wire.id) || 1;
+    while (usedIds.has(id)) id += 1;
+    usedIds.add(id);
+    let cam = existing.get(id);
+    if (!cam) cam = makeCamera(id, wire.pose, wire.rot_deg, 0.60, 0.40);
+    applyCameraConfig(cam, wire);
+    existing.delete(id);
+    next.push(cam);
+  }
+  config.cameras = next;
+
+  if (selectedKey?.startsWith('camera:') && !cameraById(Number(selectedKey.slice(7)))) {
+    selectedKey = null;
+    selectedObj = null;
+    selectionBox.visible = false;
+  }
+}
+
 function applySceneConfig(sc) {
   if (!sc) return;
   config.conveyor.pos = vec(sc.conveyor_pos ?? config.conveyor.pos);
@@ -546,12 +712,7 @@ function applySceneConfig(sc) {
   config.conveyor.size = sc.conveyor_size ? sizeFromVec(sc.conveyor_size) : copySize(config.conveyor.size);
   config.conveyor.speed = sc.conveyor_speed ?? config.conveyor.speed;
 
-  config.camera.pos = vec(sc.camera_pose ?? config.camera.pos);
-  config.camera.rot = vec(sc.camera_rot_deg ?? config.camera.rot);
-  config.camera.size = sc.camera_size ? sizeFromVec(sc.camera_size) : copySize(config.camera.size);
-  config.camera.fovAlong = sc.fov_y_m ?? config.camera.fovAlong;
-  config.camera.fovAcross = sc.fov_x_m ?? config.camera.fovAcross;
-  config.camera.distance = sc.fov_distance ?? config.camera.distance;
+  applyCamerasFromWire(sc.cameras, sc);
 
   config.scale.pos = vec(sc.scale_pose ?? config.scale.pos);
   config.scale.rot = vec(sc.scale_rot_deg ?? config.scale.rot);
@@ -660,10 +821,11 @@ const baseFields = [
   ['size.l', 'L(Y)', 0.01], ['size.w', 'W(X)', 0.01], ['size.h', 'H(Z)', 0.01],
 ];
 
+const cameraFields = [...baseFields,
+  ['fovAlong', 'FOV Y', 0.01], ['fovAcross', 'FOV X', 0.01], ['distance', 'FOV dist', 0.01]];
+
 const fieldDefs = {
   conveyor: [...baseFields, ['speed', 'speed m/s', 0.01]],
-  camera: [...baseFields,
-    ['fovAlong', 'FOV Y', 0.01], ['fovAcross', 'FOV X', 0.01], ['distance', 'FOV dist', 0.01]],
   scale: [...baseFields],
   sink: [...baseFields],
   boxes: [...baseFields,
@@ -678,6 +840,7 @@ let selectedKey = null;
 let selectedObj = null;
 let boxWeightEl = null;
 let lastTreeCount = -1;
+let lastCameraCount = -1;
 
 function getPath(obj, path) {
   return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
@@ -771,19 +934,45 @@ function applyBoxConfig(rec, bc) {
   if (boxWeightEl) boxWeightEl.textContent = `weight: ${rec.weight.toFixed(1)} kg`;
 }
 
-function makeTreeItem(label, key, isGroup = false, isChild = false) {
+function makeTreeItem(label, key, isGroup = false, isChild = false, onClick = null) {
   const item = document.createElement('div');
-  item.className = 'item' + (isGroup ? ' group' : '') + (isChild ? ' child' : '');
+  item.className = 'item' + (isGroup ? ' group' : '') + (isChild ? ' child' : '') + (onClick ? ' add' : '');
   item.textContent = label;
-  item.addEventListener('click', () => selectByKey(key));
+  item.addEventListener('click', () => (onClick ? onClick() : selectByKey(key)));
   return item;
 }
 
+function addCamera() {
+  const base = cameraById(activeCameraId) || firstCamera();
+  const nextId = config.cameras.reduce((max, cam) => Math.max(max, Number(cam.id) || 0), 0) + 1;
+  const cam = cloneCamera(base);
+  cam.id = nextId;
+  cam.pos = { ...base.pos };
+  cam.rot = { ...base.rot };
+  cam.size = copySize(base.size);
+  config.cameras.push(cam);
+  activeCameraId = nextId;
+  saveCurrentConfig();
+  applyConfig();
+  refreshCameraControls(true);
+  selectByKey(`camera:${nextId}`);
+  if (sourceMode !== 'local') publishConfig();
+}
+
 function selectByKey(key) {
+  if (key === 'cameras') {
+    selectedKey = null;
+    selectedObj = null;
+    selectionBox.visible = false;
+    rebuildSidebar();
+    return;
+  }
   selectedKey = key;
   if (key.startsWith('box:')) {
     const rec = boxes.find((b) => `box:${b.id}` === key);
     selectedObj = rec ? rec.mesh : null;
+  } else if (key.startsWith('camera:')) {
+    selectedObj = cameraRigs.get(Number(key.slice(7)))?.group || null;
   } else if (key === 'boxes' || key === 'labels') {
     selectedObj = null; // pseudo-objects: no 3D outline
   } else {
@@ -808,14 +997,33 @@ function rebuildSidebar() {
   if (!selectedKey) {
     const tree = document.createElement('div');
     tree.className = 'tree';
-    ['conveyor', 'camera', 'scale', 'sink'].forEach((key) => {
-      tree.appendChild(makeTreeItem(key, key));
+    tree.appendChild(makeTreeItem('conveyor', 'conveyor'));
+    tree.appendChild(makeTreeItem('cameras', 'cameras', true));
+    config.cameras.forEach((cam) => {
+      tree.appendChild(makeTreeItem(cameraLabel(cam), `camera:${cam.id}`, false, true));
     });
+    tree.appendChild(makeTreeItem('+ add camera', null, false, true, addCamera));
+    tree.appendChild(makeTreeItem('scale', 'scale'));
+    tree.appendChild(makeTreeItem('sink', 'sink'));
     tree.appendChild(makeTreeItem('boxes', 'boxes', true));
     boxes.forEach((b) => tree.appendChild(makeTreeItem(`box:${b.id}`, `box:${b.id}`, false, true)));
     tree.appendChild(makeTreeItem('labels', 'labels'));
     sidebar.appendChild(tree);
     lastTreeCount = boxes.length;
+    lastCameraCount = config.cameras.length;
+    return;
+  }
+
+  if (selectedKey.startsWith('camera:')) {
+    const cam = cameraById(Number(selectedKey.slice(7)));
+    if (!cam) {
+      selectedKey = null;
+      selectedObj = null;
+      selectionBox.visible = false;
+      rebuildSidebar();
+      return;
+    }
+    addSection(sidebar, selectedKey, cam, cameraFields, onConfigChanged);
     return;
   }
 
@@ -841,7 +1049,9 @@ function rebuildSidebar() {
 }
 
 function maybeRefreshTree() {
-  if (!selectedKey && boxes.length !== lastTreeCount) rebuildSidebar();
+  if (!selectedKey && (boxes.length !== lastTreeCount || config.cameras.length !== lastCameraCount)) {
+    rebuildSidebar();
+  }
 }
 
 const sidebarTab = document.getElementById('sidebarTab');
@@ -980,11 +1190,17 @@ pipRenderer.setSize(320, 213, false);
 pipRenderer.outputColorSpace = THREE.SRGBColorSpace;
 
 function renderPip() {
-  const hidden = [camHelper, cameraRig, footprint, selectionBox];
+  const hidden = [camHelper, footprint, selectionBox, ...Array.from(cameraRigs.values(), (rig) => rig.group)];
   hidden.forEach((obj) => { obj.visible = false; });
   pipRenderer.render(scene, demoCam);
   hidden.forEach((obj) => { obj.visible = true; });
 }
+
+document.getElementById('pipCamera').addEventListener('change', (event) => {
+  activeCameraId = Number(event.target.value) || firstCamera().id;
+  applyConfig();
+});
+document.getElementById('btnAddCamera').addEventListener('click', addCamera);
 
 // ---------------------------------------------------------------------------
 // Controls / animation

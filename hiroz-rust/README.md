@@ -62,15 +62,20 @@ Custom messages live in `src/messages.rs`:
 |---|---|
 | `conveyor_demo/msg/Vec3` | `x`, `y`, `z` |
 | `conveyor_demo/msg/BoxState` | `id`, `pose`, `rot_deg`, `size`, `weight_kg` |
-| `conveyor_demo/msg/CameraState` | `pose`, `rot_deg`, `fov_y_deg`, `fov_x_deg`, `fov_distance` |
-| `conveyor_demo/msg/SceneConfig` | conveyor/camera/scale/sink/box poses and sizes, FOV footprint, spawner settings, `paused`, `config_seq`, `spawn_seq`, `reset_seq`, `box_overrides` |
-| `conveyor_demo/msg/SceneSnapshot` | `stamp_sec`, `conveyor_speed`, `camera`, `scale_pose`, `scale_kg`, `config`, `boxes` |
+| `conveyor_demo/msg/CameraState` | `pose`, `rot_deg`, `fov_y_deg`, `fov_x_deg`, `fov_distance` (for older clients) |
+| `conveyor_demo/msg/CameraConfig` | `id`, `pose`, `rot_deg`, `size`, `fov_y_m`, `fov_x_m`, `fov_distance` |
+| `conveyor_demo/msg/SceneConfig` | conveyor/camera/scale/sink/box poses and sizes, `cameras`, FOV footprint, spawner settings, `paused`, `config_seq`, `spawn_seq`, `reset_seq`, `box_overrides` |
+| `conveyor_demo/msg/SceneSnapshot` | `stamp_sec`, `conveyor_speed`, `camera`, `cameras`, `scale_pose`, `scale_kg`, `config`, `boxes` |
 
 `SceneSnapshot.config` is the authoritative copy of every editable static
 setting. The browser sends `SceneConfig` on every edit; `config_seq` lets it
 ignore stale snapshots until the sim echoes that edit. `spawn_seq` and
 `reset_seq` are edge-triggered in the sim, and `box_overrides` carries a
-selected box's pose/size edit.
+selected box's pose/size edit. `cameras` is the authoritative editable camera
+list; the classic `camera`/`camera_*` fields mirror `cameras[0]`, and a config
+without `cameras` gets one synthesized from those fields. The default list has
+a top-down camera (id 1) and a side camera (id 2) at the same pose, pitched 90°
+down the belt.
 
 Coordinates match the viewer: **X** across the belt, **Y** transport direction,
 **Z** up. Box size is `(x=width, y=length, z=height)`. Weight is linear in box

@@ -47,6 +47,25 @@ impl ZMessage for CameraState {
     type Serdes = SerdeCdrSerdes<CameraState>;
 }
 
+// One editable camera. `id` is stable across config edits; the browser renders
+// all of them and uses a viewer-only selection for the PiP view.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, MessageTypeInfo)]
+#[serde(default)]
+#[ros_msg(type_name = "conveyor_demo/msg/CameraConfig")]
+pub struct CameraConfig {
+    pub id: u64,
+    pub pose: Vec3,
+    pub rot_deg: Vec3,
+    pub size: Vec3,
+    pub fov_y_m: f64,
+    pub fov_x_m: f64,
+    pub fov_distance: f64,
+}
+
+impl ZMessage for CameraConfig {
+    type Serdes = SerdeCdrSerdes<CameraConfig>;
+}
+
 // The browser sends this whenever an editor field changes. The sim owns the
 // resulting state and echoes it back in SceneSnapshot.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, MessageTypeInfo)]
@@ -58,12 +77,14 @@ pub struct SceneConfig {
     pub conveyor_size: Vec3, // x = width, y = length, z = height
     pub conveyor_speed: f64,
 
+    // Classic single-camera fields mirror cameras[0] for older clients.
     pub camera_pose: Vec3,
     pub camera_rot_deg: Vec3,
     pub camera_size: Vec3,
     pub fov_y_m: f64,
     pub fov_x_m: f64,
     pub fov_distance: f64,
+    pub cameras: Vec<CameraConfig>,
 
     pub scale_pose: Vec3,
     pub scale_rot_deg: Vec3,
@@ -103,7 +124,8 @@ impl ZMessage for SceneConfig {
 pub struct SceneSnapshot {
     pub stamp_sec: f64,
     pub conveyor_speed: f64,
-    pub camera: CameraState,
+    pub camera: CameraState, // cameras[0], for older clients
+    pub cameras: Vec<CameraConfig>,
     pub scale_pose: Vec3,
     pub scale_kg: f64,
     pub config: SceneConfig,

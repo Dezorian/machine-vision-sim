@@ -1,6 +1,6 @@
-use std::{collections::HashMap, time::{Duration, Instant}};
+use std::{collections::{HashMap, HashSet}, time::{Duration, Instant}};
 
-use crate::messages::{BoxState, CameraState, SceneConfig, SceneSnapshot, Vec3};
+use crate::messages::{BoxState, CameraConfig, CameraState, SceneConfig, SceneSnapshot, Vec3};
 use hiroz::{Builder, Result, context::ZContextBuilder};
 use tokio::select;
 
@@ -139,7 +139,61 @@ pub async fn run_monitor(opts: MonitorOptions) -> Result<()> {
     }
 }
 
+// Keep older clients working: the classic camera_* fields always mirror
+// cameras[0], and a config without cameras gets one synthesized from them.
+fn sanitize_cameras(cfg: &mut SceneConfig) {
+    if cfg.cameras.is_empty() {
+        cfg.cameras.push(CameraConfig {
+            id: 1,
+            pose: cfg.camera_pose.clone(),
+            rot_deg: cfg.camera_rot_deg.clone(),
+            size: cfg.camera_size.clone(),
+            fov_y_m: cfg.fov_y_m,
+            fov_x_m: cfg.fov_x_m,
+            fov_distance: cfg.fov_distance,
+        });
+    }
+
+    let mut used = HashSet::new();
+    let mut next_id = 1_u64;
+    for cam in &mut cfg.cameras {
+        if cam.id == 0 || used.contains(&cam.id) {
+            cam.id = next_id;
+        }
+        while used.contains(&cam.id) {
+            cam.id += 1;
+        }
+        used.insert(cam.id);
+        next_id = cam.id + 1;
+
+        if cam.fov_distance <= 0.0 { cam.fov_distance = 1.0; }
+        if cam.fov_y_m <= 0.0 { cam.fov_y_m = 0.6; }
+        if cam.fov_x_m <= 0.0 { cam.fov_x_m = 0.4; }
+    }
+
+    let primary = cfg.cameras[0].clone();
+    cfg.camera_pose = primary.pose.clone();
+    cfg.camera_rot_deg = primary.rot_deg.clone();
+    cfg.camera_size = primary.size.clone();
+    cfg.fov_y_m = primary.fov_y_m;
+    cfg.fov_x_m = primary.fov_x_m;
+    cfg.fov_distance = primary.fov_distance;
+}
+
+fn camera_state(cam: &CameraConfig) -> CameraState {
+    let distance = cam.fov_distance.max(0.01);
+    CameraState {
+        pose: cam.pose.clone(),
+        rot_deg: cam.rot_deg.clone(),
+        fov_y_deg: 2.0 * ((cam.fov_y_m / 2.0) / distance).atan() * RAD_TO_DEG,
+        fov_x_deg: 2.0 * ((cam.fov_x_m / 2.0) / distance).atan() * RAD_TO_DEG,
+        fov_distance: cam.fov_distance,
+    }
+}
+
 fn apply_config(state: &mut SimState, cfg: SceneConfig, now: Instant) {
+    let mut cfg = cfg;
+    sanitize_cameras(&mut cfg);
     let old_interval = state.config.spawn_interval;
 
     if cfg.reset_seq > state.last_reset_seq {
@@ -223,20 +277,13 @@ fn step(state: &mut SimState, dt: f64, now: Instant) {
 
 fn make_snapshot(state: &SimState, stamp_sec: f64) -> SceneSnapshot {
     let cfg = &state.config;
-    let distance = cfg.fov_distance.max(0.01);
-    let fov_y_deg = 2.0 * ((cfg.fov_y_m / 2.0) / distance).atan() * RAD_TO_DEG;
-    let fov_x_deg = 2.0 * ((cfg.fov_x_m / 2.0) / distance).atan() * RAD_TO_DEG;
+    let primary = cfg.cameras.first().cloned().unwrap_or_default();
 
     SceneSnapshot {
         stamp_sec,
         conveyor_speed: cfg.conveyor_speed,
-        camera: CameraState {
-            pose: cfg.camera_pose.clone(),
-            rot_deg: cfg.camera_rot_deg.clone(),
-            fov_y_deg,
-            fov_x_deg,
-            fov_distance: cfg.fov_distance,
-        },
+        camera: camera_state(&primary),
+        cameras: cfg.cameras.clone(),
         scale_pose: cfg.scale_pose.clone(),
         scale_kg: scale_reading(&state.boxes, cfg),
         config: cfg.clone(),
@@ -245,18 +292,41 @@ fn make_snapshot(state: &SimState, stamp_sec: f64) -> SceneSnapshot {
 }
 
 fn default_config(speed: f64, spawn_interval: f64) -> SceneConfig {
+    let top = CameraConfig {
+        id: 1,
+        pose: Vec3 { x: 0.0, y: 2.0, z: 1.0 },
+        rot_deg: Vec3::default(),
+        size: Vec3 { x: 0.14, y: 0.14, z: 0.08 },
+        fov_y_m: 0.60,
+        fov_x_m: 0.40,
+        fov_distance: 1.0,
+    };
+    // Same point as the top camera, pitched 90 degrees down the belt so it
+    // sees the sides of boxes as they travel toward the sink.
+    let side = CameraConfig {
+        id: 2,
+        pose: top.pose.clone(),
+        rot_deg: Vec3 { x: 90.0, y: 0.0, z: 0.0 },
+        size: top.size.clone(),
+        fov_y_m: 1.60,
+        fov_x_m: 0.60,
+        fov_distance: 1.0,
+    };
+    let cameras = vec![top.clone(), side];
+
     SceneConfig {
         conveyor_pos: Vec3 { x: 0.0, y: 2.0, z: -0.03 },
         conveyor_rot_deg: Vec3::default(),
         conveyor_size: Vec3 { x: 0.60, y: 4.0, z: 0.06 },
         conveyor_speed: speed,
 
-        camera_pose: Vec3 { x: 0.0, y: 2.0, z: 1.0 },
-        camera_rot_deg: Vec3::default(),
-        camera_size: Vec3 { x: 0.14, y: 0.14, z: 0.08 },
-        fov_y_m: 0.60,
-        fov_x_m: 0.40,
-        fov_distance: 1.0,
+        camera_pose: top.pose.clone(),
+        camera_rot_deg: top.rot_deg.clone(),
+        camera_size: top.size.clone(),
+        fov_y_m: top.fov_y_m,
+        fov_x_m: top.fov_x_m,
+        fov_distance: top.fov_distance,
+        cameras,
 
         scale_pose: Vec3 { x: 0.0, y: 2.60, z: 0.01 },
         scale_rot_deg: Vec3::default(),

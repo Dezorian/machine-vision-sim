@@ -2,7 +2,8 @@
 
 A lightweight Three.js scene served from Docker. By default the Rust/Hiroz sim
 is the source of truth: it owns boxes, motion, camera/scale state, and the scale
-reading; the browser only renders snapshots and sends editor changes back.
+reading; the browser only renders snapshots and sends editor changes back. The
+PiP view can switch between cameras, and cameras can be added from the UI.
 `?source=local` restores the original in-browser simulation for comparison.
 
 ## Run
@@ -39,6 +40,12 @@ in the 3D view to select and edit it. The vertical **PANEL** tab on the right
 edge opens/closes the sidebar. A short **Reset** restores the saved defaults;
 holding **Reset** for 3 s saves the current values as the new defaults.
 
+Cameras live under the **cameras** group in the sidebar tree. Select one to edit
+its pose/FOV, use the dropdown above the PiP view to switch the live view, or
+press **+ CAM** (also available as **+ add camera** in the tree) to add another
+camera. The default pair shares the same pose: CAM 1 looks down, CAM 2 is the
+same point pitched 90° down the belt to see box sides.
+
 The HUD shows the active `source`: `sim` (default, via the bridge on port 8765),
 `local` (`?source=local`), or `sim offline`.
 
@@ -55,8 +62,9 @@ All units are metres.
 | Item | Value |
 |---|---|
 | Conveyor | 4.00 m along Y, 0.60 m across X |
-| Camera | x = 0, y = 2.00, z = 1.00, looking down -Z |
-| FOV on belt | 0.60 m along Y (transport) × 0.40 m across X |
+| Camera 1 (top) | x = 0, y = 2.00, z = 1.00, looking down -Z |
+| Camera 2 (side) | same point, pitched 90° down +Y to see box sides |
+| FOV on belt (top) | 0.60 m along Y (transport) × 0.40 m across X |
 | FOV footprint | y = 1.70 .. 2.30, x = -0.20 .. +0.20 |
 | Scale | starts at y = 2.30, 0.60 m along Y × 0.60 m across X |
 | Sink | just past y = 4.0 (boxes fall in) |
@@ -174,8 +182,9 @@ which it publishes as `SceneConfig` on `/conveyor/config`.
 
 The browser never advances boxes itself in the default mode. It renders the
 latest snapshot directly (no interpolation), syncing boxes by `id`, and sends
-sidebar changes, Pause/Spawn/Reset to the sim. Boxes, scale reading, camera
-state, belt motion, and falling into the sink all come from Rust. Label offsets
+sidebar changes, Pause/Spawn/Reset, and camera add/edit operations to the sim.
+Boxes, scale reading, camera list/state, belt motion, and falling into the sink
+all come from Rust. The PiP camera selection is viewer-only. Label offsets
 remain viewer-only.
 
 No interpolation is used yet. Measured on the uConsole: the sim publisher holds

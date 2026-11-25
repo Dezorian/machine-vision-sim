@@ -99,6 +99,7 @@
     #sidebar .tree .item:hover { background: #1c2a36; color: #e8f4ff; }
     #sidebar .tree .group { color: #ffd54a; font-weight: bold; }
     #sidebar .tree .child { padding-left: 18px; color: #8fa3b5; }
+    #sidebar .tree .add { color: #48e0a0; }
 
     #pipWrap {
       position: absolute; right: 26px; bottom: 12px;
@@ -112,6 +113,16 @@
       color: #ffd54a; font: 11px/1.4 ui-monospace, monospace;
       margin-bottom: 4px; text-align: center;
     }
+    #pipWrap .pipControls { display: flex; gap: 6px; margin-bottom: 5px; }
+    #pipWrap select, #pipWrap .pipControls button {
+      min-width: 0; padding: 3px 4px;
+      background: #111a22; color: #e8f4ff;
+      border: 1px solid #3a5062; border-radius: 4px;
+      font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    #pipWrap select { flex: 1; }
+    #pipWrap .pipControls button { flex: 0 0 62px; cursor: pointer; }
+    #pipWrap .pipControls button:hover { background: #263a4a; }
     #pip { display: block; width: 320px; height: 213px; border: 1px solid #3a5062; border-radius: 4px; }
   </style>
 
@@ -150,7 +161,11 @@
   <aside id="sidebar"></aside>
 
   <div id="pipWrap">
-    <div class="pipTitle">CAM 1 · live view</div>
+    <div class="pipTitle" id="pipTitle">CAM 1 · live view</div>
+    <div class="pipControls">
+      <select id="pipCamera" aria-label="PiP camera"></select>
+      <button id="btnAddCamera" type="button">+ CAM</button>
+    </div>
     <canvas id="pip" width="320" height="213"></canvas>
   </div>
 
