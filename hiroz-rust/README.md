@@ -69,7 +69,7 @@ Custom messages live in `src/messages.rs`:
 | `conveyor_demo/msg/BoxState` | `id`, `pose`, `rot_deg`, `size`, `weight_kg`, `label_side`, `label_seed`, `country_code`, `barcode`, `order_number` |
 | `conveyor_demo/msg/CameraState` | `pose`, `rot_deg`, `fov_y_deg`, `fov_x_deg`, `fov_distance` (for older clients) |
 | `conveyor_demo/msg/CameraConfig` | `id`, `name`, `pose`, `rot_deg`, `size`, `fov_y_m`, `fov_x_m`, `fov_distance`, `trigger_anchor`, `trigger_offset` |
-| `conveyor_demo/msg/SceneConfig` | conveyor/camera/scale/sink/box poses and sizes, `cameras`, FOV footprint, spawner settings, `paused`, `config_seq`, `spawn_seq`, `reset_seq`, `box_overrides` |
+| `conveyor_demo/msg/SceneConfig` | conveyor/camera/scale/sink/box poses and sizes, `sensor_y`, `cameras`, FOV footprint, spawner settings, `paused`, `config_seq`, `spawn_seq`, `reset_seq`, `box_overrides` |
 | `conveyor_demo/msg/SceneSnapshot` | `stamp_sec`, `conveyor_speed`, `camera`, `cameras`, `scale_pose`, `scale_kg`, `config`, `boxes` |
 | `conveyor_demo/msg/LabelImage` | `stamp_sec`, `camera_id`, `box_id`, `trigger_anchor`, `trigger_offset`, `trigger_y`, `image_encoding`, `image_width`, `image_height`, `image_b64` |
 
@@ -79,10 +79,12 @@ ignore stale snapshots until the sim echoes that edit. `spawn_seq` and
 `reset_seq` are edge-triggered in the sim, and `box_overrides` carries a
 selected box's pose/size edit. `cameras` is the authoritative editable camera
 list; the classic `camera`/`camera_*` fields mirror `cameras[0]`, and a config
-without `cameras` gets one synthesized from those fields. The default list has
+without `cameras` gets one synthesized from those fields. `sensor_y` is the
+normally-open box sensor's world Y (default 0.5 m). The default list has
 a top-down camera (id 1, `TOP`) and a side camera (id 2, `SIDE`) looking exactly
-along +Y from box height. Names are editable in the sidebar; empty names get a
-`CAM <id>` fallback in the sim.
+along +Y from box height, with a 1.5 m trigger offset so middle triggers land at
+the camera. Names are editable in the sidebar; empty names get a `CAM <id>`
+fallback in the sim.
 
 ### Labels and triggers
 
@@ -94,10 +96,12 @@ the printed `country_code`, `barcode`, and `order_number`. Without
 generation.
 
 `CameraConfig.trigger_anchor` is sanitised to `off`, `middle`, `begin`, or `end`;
-anything else becomes `off`. `trigger_offset` is metres along **+Y** from that
-box reference point. The browser captures when that point first enters the
-camera's frustum, so an exact +Y SIDE view waits until the box is visible
-instead of firing at the camera's own Y plane. It detects the near-white label
+anything else becomes `off`. `begin` is the rising flank (leading/+Y edge),
+`end` the falling flank (trailing/−Y edge), and `middle` the midpoint between
+them. `trigger_offset` is metres past `sensor_y`; the browser UI presents it in
+millimetres. The browser tracks box centre and flank positions, fires once when
+the selected reference crosses `sensor_y + trigger_offset`, and consumes that
+event even if label detection fails. On success it detects near-white label
 pixels inside the projected label plane and POSTs only that detected crop to
 `POST /label_image`. The bridge caches it in `GET /label_image/latest` and
 publishes it as `LabelImage` on `/conveyor/label_image`; `trigger_y` is the box

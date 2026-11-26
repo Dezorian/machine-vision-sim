@@ -210,6 +210,12 @@ fn camera_state(cam: &CameraConfig) -> CameraState {
 fn apply_config(state: &mut SimState, cfg: SceneConfig, now: Instant) {
     let mut cfg = cfg;
     sanitize_cameras(&mut cfg);
+    if !cfg.sensor_y.is_finite() {
+        cfg.sensor_y = 0.5;
+    }
+    let belt_start = cfg.conveyor_pos.y - cfg.conveyor_size.y / 2.0;
+    let belt_end = cfg.conveyor_pos.y + cfg.conveyor_size.y / 2.0;
+    cfg.sensor_y = cfg.sensor_y.clamp(belt_start, belt_end);
     let old_interval = state.config.spawn_interval;
 
     if cfg.reset_seq > state.last_reset_seq {
@@ -331,8 +337,9 @@ fn default_config(speed: f64, spawn_interval: f64) -> SceneConfig {
         fov_y_m: 1.60,
         fov_x_m: 0.60,
         fov_distance: 1.0,
+        // 0.5 m sensor + 1.5 m travel = this camera's Y plane at 2.0 m.
         trigger_anchor: "middle".to_string(),
-        trigger_offset: 0.0,
+        trigger_offset: 1.5,
     };
     let cameras = vec![top.clone(), side];
 
@@ -341,6 +348,7 @@ fn default_config(speed: f64, spawn_interval: f64) -> SceneConfig {
         conveyor_rot_deg: Vec3::default(),
         conveyor_size: Vec3 { x: 0.60, y: 4.0, z: 0.06 },
         conveyor_speed: speed,
+        sensor_y: 0.5,
 
         camera_pose: top.pose.clone(),
         camera_rot_deg: top.rot_deg.clone(),

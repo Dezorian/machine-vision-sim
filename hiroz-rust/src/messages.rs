@@ -4,6 +4,11 @@ use hiroz::{
 };
 use serde::{Deserialize, Serialize};
 
+// Older configs omit `sensor_y`; they must get the 500 mm default, not 0 mm.
+fn default_sensor_y() -> f64 {
+    0.5
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, MessageTypeInfo)]
 #[serde(default)]
 #[ros_msg(type_name = "conveyor_demo/msg/Vec3")]
@@ -67,7 +72,9 @@ pub struct CameraConfig {
     pub fov_y_m: f64,
     pub fov_x_m: f64,
     pub fov_distance: f64,
-    // Trigger line for cropped OCR frames: off | middle | begin | end.
+    // Sensor-edge trigger for cropped OCR frames: off | middle | begin | end.
+    // `begin` is the rising flank (leading/+Y edge), `end` the falling flank
+    // (trailing/-Y edge). `trigger_offset` is metres past the sensor.
     pub trigger_anchor: String,
     pub trigger_offset: f64,
 }
@@ -86,6 +93,9 @@ pub struct SceneConfig {
     pub conveyor_rot_deg: Vec3,
     pub conveyor_size: Vec3, // x = width, y = length, z = height
     pub conveyor_speed: f64,
+    // World Y of the normally-open box sensor; 0.5 m from the conveyor start.
+    #[serde(default = "default_sensor_y")]
+    pub sensor_y: f64,
 
     // Classic single-camera fields mirror cameras[0] for older clients.
     pub camera_pose: Vec3,

@@ -78,6 +78,10 @@ const config = {
     size: { l: 4.0, w: 0.60, h: 0.06 },
     speed: 0.5,
   },
+  // Normally-open box sensor at 500 mm from the conveyor start (world Y = 0.5).
+  sensor: {
+    y: 0.5,
+  },
   cameras: [
     // Top view: local -Z points down world -Z.
     makeCamera(1, 'TOP', { x: 0, y: 2.0, z: 1.0 }, { x: 0, y: 0, z: 0 }, 0.60, 0.40,
@@ -86,7 +90,8 @@ const config = {
     // height so labels are inside the frustum. Capture waits until the box
     // enters this view rather than firing at the camera's own Y plane.
     makeCamera(2, 'SIDE', { x: 0, y: 2.0, z: 0.15 }, { x: 90, y: 0, z: 0 }, 1.60, 0.60,
-      undefined, { anchor: 'middle', offset: 0 }),
+      // Sensor at 0.5 m + 1.5 m travel = the camera's Y plane at 2.0 m.
+      undefined, { anchor: 'middle', offset: 1.5 }),
   ],
   scale: {
     pos: { x: 0, y: 2.60, z: 0.01 },
@@ -210,6 +215,17 @@ function migrateCameraTriggers(target) {
   }
 }
 
+// Legacy stored SIDE configs had a zero offset from the camera's own Y plane.
+// The new model measures from the 0.5 m sensor, so give those setups the 1.5 m
+// offset that puts a middle-triggered box at the stock SIDE camera.
+function migrateSideTriggerOffset(target) {
+  for (const cam of target.cameras || []) {
+    const isSide = cam.id === 2 || String(cam.name ?? '').trim().toUpperCase() === 'SIDE';
+    if (!isSide || !['middle', 'begin', 'end'].includes(cam.trigger_anchor)) continue;
+    if (Math.abs(Number(cam.trigger_offset) || 0) < 1e-6) cam.trigger_offset = 1.5;
+  }
+}
+
 // Restore the stock SIDE camera to an exact +Y view at box height. Previous
 // builds either started at z=1 or were tilted to RX=25; both came from the same
 // stock position, so only repair that position and leave custom cameras alone.
@@ -240,11 +256,13 @@ const storedCurrent = readStored(STORAGE_KEYS.current);
 mergeConfig(defaults, storedDefaults);
 migrateLegacyCamera(defaults, storedDefaults);
 migrateCameraTriggers(defaults);
+migrateSideTriggerOffset(defaults);
 migrateSideCameraView(defaults);
 mergeConfig(config, defaults);
 mergeConfig(config, storedCurrent);
 migrateLegacyCamera(config, storedCurrent);
 migrateCameraTriggers(config);
+migrateSideTriggerOffset(config);
 migrateSideCameraView(config);
 
 function saveCurrentConfig() {
@@ -704,11 +722,21 @@ const sinkMat = new THREE.MeshStandardMaterial({ color: 0x5a2027, roughness: 0.8
 const sinkEdgeMat = new THREE.LineBasicMaterial({ color: 0xff6b6b });
 const sinkMesh = makeBox(config.sink.size, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, sinkMat, sinkEdgeMat, sinkGroup);
 
+// Normally-open sensor marker across the belt.
+const sensorGroup = new THREE.Group();
+sensorGroup.userData.objectKey = 'sensor';
+scene.add(sensorGroup);
+const sensorMat = new THREE.MeshBasicMaterial({ color: 0xff3df2, transparent: true, opacity: 0.55 });
+makeBox({ l: 0.02, w: 0.64, h: 0.02 }, { x: 0, y: 0, z: 0.055 }, { x: 0, y: 0, z: 0 }, sensorMat, null, sensorGroup);
+
 const scaleLabel = makeLabel('--- kg', { border: '#48e0a0', color: '#48e0a0' });
 const sinkLabel = makeLabel('SINK', { border: '#ff6b6b', color: '#ff6b6b' });
+const sensorLabel = makeLabel('SENSOR', { border: '#ff3df2', color: '#ff3df2' });
 scaleLabel.userData.objectKey = 'labels';
 sinkLabel.userData.objectKey = 'labels';
+sensorLabel.userData.objectKey = 'labels';
 scene.add(scaleLabel, sinkLabel);
+sensorGroup.add(sensorLabel);
 
 // Selection outline
 const selectionBox = new THREE.Box3Helper(new THREE.Box3(), 0x64d2ff);
@@ -749,17 +777,6 @@ function configureDemoCam(cam) {
   demoCam.far = Math.max(distance * 1.25 + 0.25, config.conveyor.size.l + 1.0);
   demoCam.updateProjectionMatrix();
   demoCam.updateMatrixWorld(true);
-}
-
-// Trigger detection uses the same projection as the PiP renderer, so a crop is
-// taken exactly when the watched box point first enters that camera's view.
-const triggerFrustum = new THREE.Frustum();
-const triggerProjection = new THREE.Matrix4();
-
-function configureTriggerView(cam) {
-  configureDemoCam(cam);
-  triggerProjection.multiplyMatrices(demoCam.projectionMatrix, demoCam.matrixWorldInverse);
-  triggerFrustum.setFromProjectionMatrix(triggerProjection);
 }
 
 function applyConfig() {
@@ -807,6 +824,12 @@ function applyConfig() {
   sinkGroup.rotation.set(deg(c.sink.rot.x), deg(c.sink.rot.y), deg(c.sink.rot.z));
   sinkMesh.scale.set(c.sink.size.w, c.sink.size.l, c.sink.size.h);
 
+  // Box sensor
+  sensorGroup.position.set(c.conveyor.pos.x, c.sensor.y, c.conveyor.pos.z);
+  sensorLabel.position.set(0, 0, 0.20);
+  sensorLabel.scale.set(c.labels.size.l * 0.55, c.labels.size.w * 0.55, 1);
+  sensorLabel.userData.setText(`SENSOR ${Math.round(c.sensor.y * 1000)} mm`);
+
   // Labels
   scaleLabel.visible = c.labels.show;
   sinkLabel.visible = c.labels.show;
@@ -848,6 +871,7 @@ function sceneConfigFromEditor(options = {}) {
     conveyor_rot_deg: vec(c.conveyor.rot),
     conveyor_size: sceneSize(c.conveyor.size), // x = W, y = L, z = H
     conveyor_speed: c.conveyor.speed,
+    sensor_y: c.sensor.y,
 
     camera_pose: vec(primary.pos),
     camera_rot_deg: vec(primary.rot),
@@ -993,6 +1017,7 @@ function applySceneConfig(sc) {
   config.conveyor.rot = vec(sc.conveyor_rot_deg ?? config.conveyor.rot);
   config.conveyor.size = sc.conveyor_size ? sizeFromVec(sc.conveyor_size) : copySize(config.conveyor.size);
   config.conveyor.speed = sc.conveyor_speed ?? config.conveyor.speed;
+  config.sensor.y = Number.isFinite(sc.sensor_y) ? sc.sensor_y : config.sensor.y;
 
   applyCamerasFromWire(sc.cameras, sc);
 
@@ -1055,9 +1080,7 @@ function syncBoxes(simBoxes) {
     rec.h = size.h;
     rec.weight = Number.isFinite(sb.weight_kg) ? sb.weight_kg : weightFor(size.l, size.w, size.h);
     setBoxLabelData(rec, labelDataFromWire(sb));
-    if (boxWeightEl && selectedKey === `box:${id}`) {
-      boxWeightEl.textContent = `weight: ${rec.weight.toFixed(1)} kg`;
-    }
+    updateBoxReadout(rec);
   }
 
   for (let i = boxes.length - 1; i >= 0; i--) {
@@ -1110,10 +1133,11 @@ const baseFields = [
 const cameraFields = [['name', 'name', 'text'], ...baseFields,
   ['fovAlong', 'FOV Y', 0.01], ['fovAcross', 'FOV X', 0.01], ['distance', 'FOV dist', 0.01],
   ['trigger_anchor', 'trigger at', 'select:off,middle,begin,end'],
-  ['trigger_offset', 'trig offset m', 0.01]];
+  ['trigger_offset', 'trig offset mm', 'mm']];
 
 const fieldDefs = {
   conveyor: [...baseFields, ['speed', 'speed m/s', 0.01]],
+  sensor: [['y', 'sensor Y mm', 'mm']],
   scale: [...baseFields],
   sink: [...baseFields],
   boxes: [...baseFields,
@@ -1127,6 +1151,7 @@ const fieldDefs = {
 let selectedKey = null;
 let selectedObj = null;
 let boxWeightEl = null;
+let boxTelemetryEl = null;
 let lastTreeCount = -1;
 let lastCameraCount = -1;
 
@@ -1198,6 +1223,23 @@ function addSection(sidebar, sectionKey, target, defs, onChange) {
       wrap.appendChild(document.createTextNode(label));
       grid.appendChild(wrap);
       uiRefs[full] = input;
+    } else if (step === 'mm') {
+      // Stored/wire values stay in metres; the UI presents millimetres.
+      const wrap = document.createElement('label');
+      wrap.textContent = label;
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.step = '1';
+      input.value = Math.round((Number(getPath(target, path)) || 0) * 1000);
+      input.addEventListener('input', () => {
+        const mm = parseFloat(input.value);
+        if (Number.isNaN(mm)) return;
+        setPath(target, path, mm / 1000);
+        onChange(full);
+      });
+      wrap.appendChild(input);
+      grid.appendChild(wrap);
+      uiRefs[full] = input;
     } else {
       const wrap = document.createElement('label');
       wrap.textContent = label;
@@ -1218,6 +1260,32 @@ function addSection(sidebar, sectionKey, target, defs, onChange) {
   }
   sec.appendChild(grid);
   sidebar.appendChild(sec);
+}
+
+function formatBoxTelemetry(rec) {
+  const sy = sensorY();
+  const centerY = rec.mesh.position.y;
+  const beginY = centerY + rec.l / 2;
+  const endY = centerY - rec.l / 2;
+  const deltaMm = Math.round((centerY - sy) * 1000);
+  const signedDelta = `${deltaMm >= 0 ? '+' : ''}${deltaMm}`;
+  return [
+    `sensor: ${Math.round(sy * 1000)} mm · NO ${boxSignal(rec) ? 'HIGH' : 'LOW'}`,
+    `center: ${Math.round(centerY * 1000)} mm (Δ ${signedDelta} mm)`,
+    `begin: ${Math.round(beginY * 1000)} mm · end: ${Math.round(endY * 1000)} mm`,
+  ].join('\n');
+}
+
+function updateBoxReadout(rec) {
+  if (selectedKey !== `box:${rec.id}`) return;
+  if (boxWeightEl) boxWeightEl.textContent = `weight: ${rec.weight.toFixed(1)} kg`;
+  if (boxTelemetryEl) boxTelemetryEl.textContent = formatBoxTelemetry(rec);
+}
+
+function updateSelectedBoxTelemetry() {
+  if (!selectedKey?.startsWith('box:')) return;
+  const rec = boxes.find((b) => `box:${b.id}` === selectedKey);
+  if (rec) updateBoxReadout(rec);
 }
 
 function makeBoxConfig(rec) {
@@ -1253,7 +1321,7 @@ function applyBoxConfig(rec, bc) {
   rec.h = bc.size.h;
   rec.weight = weightFor(rec.l, rec.w, rec.h);
   refreshBoxLabel(rec);
-  if (boxWeightEl) boxWeightEl.textContent = `weight: ${rec.weight.toFixed(1)} kg`;
+  updateBoxReadout(rec);
 }
 
 function makeTreeItem(label, key, isGroup = false, isChild = false, onClick = null) {
@@ -1316,11 +1384,13 @@ function rebuildSidebar() {
   sidebar.innerHTML = '';
   uiRefs = {};
   boxWeightEl = null;
+  boxTelemetryEl = null;
 
   if (!selectedKey) {
     const tree = document.createElement('div');
     tree.className = 'tree';
     tree.appendChild(makeTreeItem('conveyor', 'conveyor'));
+    tree.appendChild(makeTreeItem('sensor', 'sensor'));
     tree.appendChild(makeTreeItem('cameras', 'cameras', true));
     config.cameras.forEach((cam) => {
       tree.appendChild(makeTreeItem(cameraLabel(cam), `camera:${cam.id}`, false, true));
@@ -1363,8 +1433,11 @@ function rebuildSidebar() {
     addSection(sidebar, selectedKey, bc, baseFields, () => commitBoxConfig(rec, bc));
     boxWeightEl = document.createElement('div');
     boxWeightEl.className = 'check';
-    boxWeightEl.textContent = `weight: ${rec.weight.toFixed(1)} kg`;
     sidebar.appendChild(boxWeightEl);
+    boxTelemetryEl = document.createElement('div');
+    boxTelemetryEl.className = 'telemetry';
+    sidebar.appendChild(boxTelemetryEl);
+    updateBoxReadout(rec);
     return;
   }
 
@@ -1803,10 +1876,33 @@ async function captureTrigger(cam, rec, triggerY) {
   return false;
 }
 
-function boxTriggerY(rec, anchor, offset) {
-  const anchorY = rec.mesh.position.y
-    + (anchor === 'begin' ? -rec.l / 2 : anchor === 'end' ? rec.l / 2 : 0);
-  return anchorY + offset;
+function sensorY() {
+  const y = Number(config.sensor?.y);
+  return Number.isFinite(y) ? y : 0.5;
+}
+
+function boxFlanks(rec) {
+  const centerY = rec.mesh.position.y;
+  return {
+    centerY,
+    // Travel is +Y: begin is the rising flank (leading/+Y edge), end is the
+    // falling flank (trailing/-Y edge). Middle is between the two flanks.
+    beginY: centerY + rec.l / 2,
+    endY: centerY - rec.l / 2,
+  };
+}
+
+function boxSignal(rec) {
+  const { beginY, endY } = boxFlanks(rec);
+  const sy = sensorY();
+  return beginY >= sy && endY <= sy; // NO sensor: high while the box overlaps
+}
+
+function boxTriggerY(rec, anchor) {
+  const flanks = boxFlanks(rec);
+  return anchor === 'begin' ? flanks.beginY
+    : anchor === 'end' ? flanks.endY
+      : flanks.centerY;
 }
 
 function checkTriggerCaptures() {
@@ -1815,31 +1911,26 @@ function checkTriggerCaptures() {
     const anchor = String(cam.trigger_anchor ?? 'off').trim().toLowerCase();
     if (!['middle', 'begin', 'end'].includes(anchor)) continue;
     const offset = Number(cam.trigger_offset) || 0;
+    const triggerLineY = sensorY() + offset;
 
-    configureTriggerView(cam);
     for (const rec of boxes) {
       const key = `${cam.id}:${rec.id}`;
       if (capturedTriggers.has(key)) continue;
+      if (!rec.triggerPrevY) rec.triggerPrevY = new Map();
 
-      // Watch the configured box reference point. A SIDE camera looking along
-      // +Y no longer fires at its own Y plane; it fires when the box has moved
-      // far enough to be visible in this camera's frustum.
-      const triggerY = boxTriggerY(rec, anchor, offset);
-      const triggerPoint = new THREE.Vector3(rec.mesh.position.x, triggerY, rec.mesh.position.z);
-      if (!triggerFrustum.containsPoint(triggerPoint)) continue;
+      const prev = rec.triggerPrevY.get(cam.id);
+      const currentY = boxTriggerY(rec, anchor);
+      const crossed = Number.isFinite(prev?.y)
+        && prev.line === triggerLineY
+        && ((prev.y < triggerLineY && currentY >= triggerLineY)
+          || (prev.y > triggerLineY && currentY <= triggerLineY));
+      rec.triggerPrevY.set(cam.id, { y: currentY, line: triggerLineY });
+      if (!crossed) continue;
 
-      // The crop is centred on the label face, so require that face to be
-      // inside the image too. This avoids posting a crop from behind the lens.
-      const labelPixel = projectToPixels(labelFacePoint(rec), demoCam);
-      if (labelPixel.behind
-        || labelPixel.x < 0 || labelPixel.x > pipCanvas.width
-        || labelPixel.y < 0 || labelPixel.y > pipCanvas.height) continue;
-
+      // Exact acquisition: consume the event here. If the label is not visible
+      // in this frame, that box/camera gets no crop (no delayed retry).
       capturedTriggers.add(key);
-      // Retry on the next frame if no label pixels were found yet.
-      void captureTrigger(cam, rec, triggerY).then((ok) => {
-        if (!ok) capturedTriggers.delete(key);
-      });
+      void captureTrigger(cam, rec, currentY);
     }
   }
 }
@@ -2175,6 +2266,7 @@ function animate(now) {
   renderer.render(scene, orbitCam);
   checkTriggerCaptures();
   renderPip();
+  updateSelectedBoxTelemetry();
 
   document.getElementById('count').textContent = String(boxes.length);
 }

@@ -143,7 +143,7 @@ async fn handle_connection(
             if let Ok(mut cache) = label_cache.lock() {
                 *cache = Some(label.clone());
             }
-            if let Err(err) = label_tx.send(label).await {
+            if label_tx.send(label).await.is_err() {
                 return respond(
                     &mut write,
                     "503 Service Unavailable",

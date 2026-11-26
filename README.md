@@ -48,12 +48,13 @@ edge opens/closes the sidebar. A short **Reset** restores the saved defaults;
 holding **Reset** for 3 s saves the current values as the new defaults.
 
 Cameras live under the **cameras** group in the sidebar tree. Select one to edit
-its name, pose, FOV, and OCR trigger (`trigger at`, `trig offset m`); the name
+its name, pose, FOV, and OCR trigger (`trigger at`, `trig offset mm`); the name
 appears in the tree and PiP dropdown. Use the dropdown above the PiP view to
 switch the live view, or press **+ CAM** (also available as **+ add camera** in
 the tree) to add another camera. CAM 1 looks down from above; CAM 2 looks
 exactly along **+Y** from box height. CAM 1 has its trigger off; CAM 2 captures
-a box's `middle` once the box has moved far enough to enter that camera's view.
+a box's `middle` 1500 mm after the 500 mm sensor, which puts the box at the
+camera. The `sensor` tree item edits that sensor's Y position in millimetres.
 
 The PiP **LIVE / TRIGGER** button toggles between the selected camera's live
 view and that camera's latest cropped trigger image. Switching the camera
@@ -114,8 +115,9 @@ camera.
 The sidebar shows **only the object currently selected**. Click an object in the
 3D viewer (conveyor, camera, scale, sink, a box, or a 3D label) to select it;
 the selected object gets a cyan bounding outline. Click empty space to clear the
-selection and show a tree of all objects instead: `conveyor`, `camera`, `scale`,
-`sink`, a `boxes` group with each live `box:<id>` nested under it, and `labels`.
+selection and show a tree of all objects instead: `conveyor`, `sensor`, `camera`,
+`scale`, `sink`, a `boxes` group with each live `box:<id>` nested under it, and
+`labels`.
 Click a tree item to select that object. The tree refreshes automatically as
 boxes spawn and despawn.
 
@@ -128,10 +130,11 @@ Every section exposes:
 | Selection | Extra fields |
 |---|---|
 | `conveyor` | `speed` (m/s) |
-| `camera` | `FOV Y`, `FOV X`, `FOV dist`, `trigger at`, `trig offset m` |
+| `sensor` | `sensor Y mm` (editable NO sensor position) |
+| `camera` | `FOV Y`, `FOV X`, `FOV dist`, `trigger at`, `trig offset mm` |
 | `scale` | — |
 | `sink` | — |
-| `box:<id>` | size/pose of that individual box + live weight readout |
+| `box:<id>` | size/pose, live weight, centre/flank positions in mm, Δ from sensor, NO signal |
 | `labels` | `show labels` (show/hide the 3D scale, sink, and box labels) |
 
 The spawner defaults (random size, min/max L/W/H, spawn interval) live in the
@@ -159,24 +162,32 @@ ORD-000123 NL 8712345678902
 ORD-000124 DE 4006381333931
 ```
 
+A normally-open (NO) sensor sits at the editable `sensor Y mm` position (default
+500 mm, shown as a magenta marker). Its signal is HIGH while any part of a box
+overlaps that Y plane: from the leading `+Y` edge reaching it until the trailing
+`-Y` edge passes.
+
 Each camera has two trigger fields:
 
 | Field | Values | Meaning |
 |---|---|---|
-| `trigger at` | `off`, `middle`, `begin`, `end` | Which box reference point triggers a crop |
-| `trig offset m` | metres | Offset along **+Y** from that reference point |
+| `trigger at` | `off`, `middle`, `begin`, `end` | `begin` = rising flank (leading/+Y edge), `end` = falling flank (trailing/−Y edge), `middle` = halfway between the flanks (box centre) |
+| `trig offset mm` | millimetres | Travel past the sensor before acquisition; the UI shows mm, the wire API keeps metres |
 
-The browser watches the box reference point (plus offset) and captures when
-that point first enters the camera's frustum. This lets a SIDE camera look
-exactly along **+Y** and still wait until the box is visible, instead of firing
-at the camera's own Y plane. On entry it renders that camera, then runs a small
-blob detector over the rendered pixels: the projected label plane supplies a
-search window, and the largest connected near-white region inside it is the
-detected label. The JPEG crop is the detected label's pixel bounds (plus a 2 px
-border margin), not a rectangle derived from the box size. If no label pixels
-are found yet, the box is retried on the next frame. The full PiP stream stays
-in the browser for viewing; it is never sent to OCR. A box/camera pair is
-captured at most once per run.
+The browser tracks every box's centre and both flank positions in millimetres.
+For the selected box the sidebar shows its centre, leading/trailing edges, Δ
+from the sensor, and live NO signal. A camera fires once when the chosen
+reference point crosses `sensor Y + trig offset`. The default SIDE offset is
+1500 mm, so a middle-triggered box is acquired at y = 2000 mm.
+
+Acquisition is exact: if the label is not visible/detectable in that frame, the
+box/camera event is consumed and no crop is posted. On a successful trigger the
+browser renders that camera and runs a small blob detector: the projected label
+plane supplies a search window, and the largest connected near-white region
+inside it is the detected label. The JPEG crop is the detected label's pixel
+bounds plus a 2 px border margin, not a rectangle derived from the box size.
+The full PiP stream stays in the browser for viewing; it is never sent to OCR.
+A box/camera pair is captured at most once per run.
 
 The crop contract is:
 
@@ -186,7 +197,7 @@ The crop contract is:
   "camera_id": 2,
   "box_id": 7,
   "trigger_anchor": "middle",
-  "trigger_offset": 0.0,
+  "trigger_offset": 1.5,
   "trigger_y": 2.0,
   "image_encoding": "jpeg",
   "image_width": 160,
@@ -195,6 +206,7 @@ The crop contract is:
 }
 ```
 
+`trigger_offset` in the wire/JSON contract is metres (1.5 = 1500 mm in the UI).
 `trigger_y` is the box reference point's world Y at capture, and `stamp_sec` is
 browser capture time in seconds. `GET /label_image/latest` returns the latest
 crop (or HTTP 404 before the first one). The separate ROS2 package in [`ros2_label_ocr/`](ros2_label_ocr/README.md)
