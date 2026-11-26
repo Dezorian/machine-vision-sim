@@ -55,6 +55,11 @@ the tree) to add another camera. CAM 1 looks down from above; CAM 2 looks
 exactly along **+Y** from box height. CAM 1 has its trigger off; CAM 2 captures
 a box's `middle` 1500 mm after the 500 mm sensor, which puts the box at the
 camera. The `sensor` tree item edits that sensor's Y position in millimetres.
+The details panel for a camera or an individual box has a **Delete** button;
+it is disabled for the last remaining camera. Deleting a box publishes a
+`despawn_ids` request to the sim rather than removing it only in the browser.
+Core scene objects (conveyor, sensor, scale, sink, labels, groups) cannot be
+deleted.
 
 The PiP **LIVE / TRIGGER** button toggles between the selected camera's live
 view and that camera's latest cropped trigger image. Switching the camera
@@ -131,10 +136,10 @@ Every section exposes:
 |---|---|
 | `conveyor` | `speed` (m/s) |
 | `sensor` | `sensor Y mm` (editable NO sensor position) |
-| `camera` | `FOV Y`, `FOV X`, `FOV dist`, `trigger at`, `trig offset mm` |
+| `camera` | `FOV Y`, `FOV X`, `FOV dist`, `trigger at`, `trig offset mm`, **Delete camera** |
 | `scale` | — |
 | `sink` | — |
-| `box:<id>` | size/pose, live weight, centre/flank positions in mm, Δ from sensor, NO signal |
+| `box:<id>` | size/pose, live weight, centre/flank positions in mm, Δ from sensor, NO signal, **Delete box** |
 | `labels` | `show labels` (show/hide the 3D scale, sink, and box labels) |
 
 The spawner defaults (random size, min/max L/W/H, spawn interval) live in the

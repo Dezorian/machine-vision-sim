@@ -235,6 +235,13 @@ fn apply_config(state: &mut SimState, cfg: SceneConfig, now: Instant) {
     }
     state.last_spawn_seq = state.last_spawn_seq.max(cfg.spawn_seq);
 
+    if !cfg.despawn_ids.is_empty() {
+        for id in &cfg.despawn_ids {
+            state.falling_vz.remove(id);
+        }
+        state.boxes.retain(|b| !cfg.despawn_ids.contains(&b.id));
+    }
+
     for override_box in &cfg.box_overrides {
         if let Some(b) = state.boxes.iter_mut().find(|b| b.id == override_box.id) {
             b.pose = override_box.pose.clone();
@@ -380,6 +387,7 @@ fn default_config(speed: f64, spawn_interval: f64) -> SceneConfig {
         spawn_seq: 0,
         reset_seq: 0,
         box_overrides: Vec::new(),
+        despawn_ids: Vec::new(),
     }
 }
 

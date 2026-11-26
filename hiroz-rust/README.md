@@ -69,22 +69,24 @@ Custom messages live in `src/messages.rs`:
 | `conveyor_demo/msg/BoxState` | `id`, `pose`, `rot_deg`, `size`, `weight_kg`, `label_side`, `label_seed`, `country_code`, `barcode`, `order_number` |
 | `conveyor_demo/msg/CameraState` | `pose`, `rot_deg`, `fov_y_deg`, `fov_x_deg`, `fov_distance` (for older clients) |
 | `conveyor_demo/msg/CameraConfig` | `id`, `name`, `pose`, `rot_deg`, `size`, `fov_y_m`, `fov_x_m`, `fov_distance`, `trigger_anchor`, `trigger_offset` |
-| `conveyor_demo/msg/SceneConfig` | conveyor/camera/scale/sink/box poses and sizes, `sensor_y`, `cameras`, FOV footprint, spawner settings, `paused`, `config_seq`, `spawn_seq`, `reset_seq`, `box_overrides` |
+| `conveyor_demo/msg/SceneConfig` | conveyor/camera/scale/sink/box poses and sizes, `sensor_y`, `cameras`, FOV footprint, spawner settings, `paused`, `config_seq`, `spawn_seq`, `reset_seq`, `box_overrides`, `despawn_ids` |
 | `conveyor_demo/msg/SceneSnapshot` | `stamp_sec`, `conveyor_speed`, `camera`, `cameras`, `scale_pose`, `scale_kg`, `config`, `boxes` |
 | `conveyor_demo/msg/LabelImage` | `stamp_sec`, `camera_id`, `box_id`, `trigger_anchor`, `trigger_offset`, `trigger_y`, `image_encoding`, `image_width`, `image_height`, `image_b64` |
 
 `SceneSnapshot.config` is the authoritative copy of every editable static
 setting. The browser sends `SceneConfig` on every edit; `config_seq` lets it
 ignore stale snapshots until the sim echoes that edit. `spawn_seq` and
-`reset_seq` are edge-triggered in the sim, and `box_overrides` carries a
-selected box's pose/size edit. `cameras` is the authoritative editable camera
+`reset_seq` are edge-triggered in the sim, `box_overrides` carries a
+selected box's pose/size edit, and `despawn_ids` asks the sim to remove those
+boxes. `cameras` is the authoritative editable camera
 list; the classic `camera`/`camera_*` fields mirror `cameras[0]`, and a config
 without `cameras` gets one synthesized from those fields. `sensor_y` is the
 normally-open box sensor's world Y (default 0.5 m). The default list has
 a top-down camera (id 1, `TOP`) and a side camera (id 2, `SIDE`) looking exactly
 along +Y from box height, with a 1.5 m trigger offset so middle triggers land at
 the camera. Names are editable in the sidebar; empty names get a `CAM <id>`
-fallback in the sim.
+fallback in the sim. The sidebar's Delete controls remove an entry from
+`cameras` or publish a box id in `despawn_ids`; the last camera is protected.
 
 ### Labels and triggers
 

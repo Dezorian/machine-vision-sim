@@ -913,6 +913,7 @@ function sceneConfigFromEditor(options = {}) {
     spawn_seq: spawnSeq,
     reset_seq: resetSeq,
     box_overrides: options.boxOverrides ?? [],
+    despawn_ids: options.despawnIds ?? [],
   };
 }
 
@@ -1332,6 +1333,52 @@ function makeTreeItem(label, key, isGroup = false, isChild = false, onClick = nu
   return item;
 }
 
+function addDeleteButton(sidebar, label, onClick, disabled = false, title = '') {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'delete';
+  button.textContent = label;
+  button.disabled = disabled;
+  if (title) button.title = title;
+  button.addEventListener('click', onClick);
+  sidebar.appendChild(button);
+}
+
+function deleteCamera(id) {
+  const cam = cameraById(id);
+  if (!cam || config.cameras.length <= 1) return;
+  if (!window.confirm(`Delete ${cameraLabel(cam)}?`)) return;
+
+  config.cameras = config.cameras.filter((entry) => entry.id !== id);
+  for (const key of Array.from(capturedTriggers)) {
+    if (key.startsWith(`${id}:`)) capturedTriggers.delete(key);
+  }
+  latestLabelImages.delete(id);
+  if (activeCameraId === id) activeCameraId = firstCamera().id;
+  if (selectedKey === `camera:${id}`) {
+    selectedKey = null;
+    selectedObj = null;
+    selectionBox.visible = false;
+  }
+  saveCurrentConfig();
+  applyConfig();
+  refreshPipModeUI();
+  rebuildSidebar();
+  if (sourceMode !== 'local') publishConfig();
+}
+
+function deleteBox(rec) {
+  if (!rec) return;
+  const index = boxes.indexOf(rec);
+  if (index < 0) return;
+  if (!window.confirm(`Delete box ${rec.id}?`)) return;
+
+  boxes.splice(index, 1);
+  disposeBox(rec); // also clears the selection and trigger history
+  updateScale();
+  if (sourceMode !== 'local') publishConfig({ despawnIds: [rec.id] });
+}
+
 function addCamera() {
   const base = cameraById(activeCameraId) || firstCamera();
   const nextId = config.cameras.reduce((max, cam) => Math.max(max, Number(cam.id) || 0), 0) + 1;
@@ -1417,6 +1464,11 @@ function rebuildSidebar() {
       return;
     }
     addSection(sidebar, selectedKey, cam, cameraFields, onConfigChanged);
+    addDeleteButton(
+      sidebar, 'Delete camera', () => deleteCamera(cam.id),
+      config.cameras.length <= 1,
+      config.cameras.length <= 1 ? 'At least one camera is required' : '',
+    );
     return;
   }
 
@@ -1438,6 +1490,7 @@ function rebuildSidebar() {
     boxTelemetryEl.className = 'telemetry';
     sidebar.appendChild(boxTelemetryEl);
     updateBoxReadout(rec);
+    addDeleteButton(sidebar, 'Delete box', () => deleteBox(rec));
     return;
   }
 

@@ -132,6 +132,8 @@ pub struct SceneConfig {
 
     // Pose/size edits for a specific existing box.
     pub box_overrides: Vec<BoxState>,
+    // Ids of boxes the editor asked the sim to remove. Applied once per config.
+    pub despawn_ids: Vec<u64>,
 }
 
 impl ZMessage for SceneConfig {

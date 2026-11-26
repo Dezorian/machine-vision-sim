@@ -101,6 +101,13 @@
     #sidebar .check { display: flex; align-items: center; gap: 6px; margin-top: 6px; color: #8fa3b5; font-size: 11px; }
     #sidebar .check input { accent-color: #48e0a0; }
     #sidebar .telemetry { white-space: pre-line; margin-top: 8px; color: #48e0a0; font-size: 11px; line-height: 1.5; }
+    #sidebar button.delete {
+      width: 100%; margin-top: 10px; padding: 6px;
+      background: #3a1f25; border: 1px solid #ff6b6b; border-radius: 4px;
+      color: #ff9b9b; font: 11px ui-monospace, monospace; cursor: pointer;
+    }
+    #sidebar button.delete:hover:not(:disabled) { background: #4a252c; color: #ffd0d0; }
+    #sidebar button.delete:disabled { opacity: .45; cursor: not-allowed; }
     #sidebar .empty { color: #6f8292; font-size: 11px; line-height: 1.6; padding: 8px; }
     #sidebar .tree { font-size: 11px; }
     #sidebar .tree .item { padding: 4px 6px; border-radius: 4px; cursor: pointer; color: #bcd0e0; }
