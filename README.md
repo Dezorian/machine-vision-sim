@@ -169,10 +169,14 @@ Each camera has two trigger fields:
 The browser watches the box reference point (plus offset) and captures when
 that point first enters the camera's frustum. This lets a SIDE camera look
 exactly along **+Y** and still wait until the box is visible, instead of firing
-at the camera's own Y plane. On entry it renders that camera, crops around the
-label face of that box, JPEG-encodes only that crop, and POSTs it to the bridge
-at `POST /label_image`. The full PiP stream stays in the browser for viewing;
-it is never sent to OCR. A box/camera pair is captured at most once per run.
+at the camera's own Y plane. On entry it renders that camera, then runs a small
+blob detector over the rendered pixels: the projected label plane supplies a
+search window, and the largest connected near-white region inside it is the
+detected label. The JPEG crop is the detected label's pixel bounds (plus a 2 px
+border margin), not a rectangle derived from the box size. If no label pixels
+are found yet, the box is retried on the next frame. The full PiP stream stays
+in the browser for viewing; it is never sent to OCR. A box/camera pair is
+captured at most once per run.
 
 The crop contract is:
 

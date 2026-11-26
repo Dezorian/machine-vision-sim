@@ -1608,6 +1608,8 @@ async function pollLatestLabelImage() {
 
 const cropCanvas = document.createElement('canvas');
 const cropCtx = cropCanvas.getContext('2d');
+const fullFrameCanvas = document.createElement('canvas');
+const fullFrameCtx = fullFrameCanvas.getContext('2d', { willReadFrequently: true });
 const capturedTriggers = new Set();
 
 function renderPipFor(cam) {
@@ -1640,19 +1642,98 @@ function labelFacePoint(rec) {
   return new THREE.Vector3(...local).applyMatrix4(rec.mesh.matrixWorld);
 }
 
-function projectedBoxSize(rec, cam) {
+// The projected label plane is only a search window. The actual crop comes
+// from the bright label pixels found inside it, not from box geometry.
+function projectedLabelRoi(rec, cam) {
+  const mesh = rec.labelMesh;
+  if (!mesh) return null;
+  mesh.updateWorldMatrix(true, false);
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const sx of [-0.5, 0.5]) {
     for (const sy of [-0.5, 0.5]) {
-      for (const sz of [-0.5, 0.5]) {
-        const point = new THREE.Vector3(sx, sy, sz).applyMatrix4(rec.mesh.matrixWorld);
-        const p = projectToPixels(point, cam);
-        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
-        minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
-      }
+      const point = new THREE.Vector3(sx, sy, 0).applyMatrix4(mesh.matrixWorld);
+      const p = projectToPixels(point, cam);
+      if (p.behind) return null;
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
     }
   }
-  return { w: maxX - minX, h: maxY - minY };
+  return { minX, minY, maxX, maxY };
+}
+
+function isLabelPixel(data, offset) {
+  const r = data[offset];
+  const g = data[offset + 1];
+  const b = data[offset + 2];
+  const lo = Math.min(r, g, b);
+  const hi = Math.max(r, g, b);
+  // The shipping label is near-white (#f7f7f2); boxes and belt are coloured
+  // or much darker, so brightness + low channel spread isolates the paper.
+  return lo >= 185 && hi - lo <= 45;
+}
+
+// Flood-fill the largest near-white component inside the ROI and return its
+// pixel bounds. The crop is therefore the detected label, not a guessed box.
+function detectLabelBBox(imageData, roi) {
+  const { data, width, height } = imageData;
+  const clamp = THREE.MathUtils.clamp;
+  const x0 = clamp(Math.floor(roi.minX - 10), 0, width - 1);
+  const y0 = clamp(Math.floor(roi.minY - 10), 0, height - 1);
+  const x1 = clamp(Math.ceil(roi.maxX + 10), 0, width - 1);
+  const y1 = clamp(Math.ceil(roi.maxY + 10), 0, height - 1);
+  const visited = new Uint8Array(width * height);
+  const stack = [];
+  let best = null;
+
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const start = y * width + x;
+      if (visited[start] || !isLabelPixel(data, start * 4)) continue;
+      stack.length = 0;
+      stack.push(start);
+      visited[start] = 1;
+      let minX = x, maxX = x, minY = y, maxY = y, count = 0;
+
+      while (stack.length) {
+        const idx = stack.pop();
+        const py = Math.floor(idx / width);
+        const px = idx - py * width;
+        count++;
+        minX = Math.min(minX, px); maxX = Math.max(maxX, px);
+        minY = Math.min(minY, py); maxY = Math.max(maxY, py);
+
+        for (let dy = -1; dy <= 1; dy++) {
+          const ny = py + dy;
+          if (ny < y0 || ny > y1) continue;
+          for (let dx = -1; dx <= 1; dx++) {
+            if (!dx && !dy) continue;
+            const nx = px + dx;
+            if (nx < x0 || nx > x1) continue;
+            const next = ny * width + nx;
+            if (visited[next] || !isLabelPixel(data, next * 4)) continue;
+            visited[next] = 1;
+            stack.push(next);
+          }
+        }
+      }
+
+      const w = maxX - minX + 1;
+      const h = maxY - minY + 1;
+      if (count < 24 || w < 8 || h < 6) continue;
+      if (!best || w * h > best.w * best.h) best = { x: minX, y: minY, w, h };
+    }
+  }
+
+  if (!best) return null;
+  // A couple of pixels of margin keep the full rounded border after JPEG.
+  const pad = 2;
+  const x = clamp(best.x - pad, 0, width - 1);
+  const y = clamp(best.y - pad, 0, height - 1);
+  return {
+    x, y,
+    w: Math.min(width - x, best.w + pad * 2),
+    h: Math.min(height - y, best.h + pad * 2),
+  };
 }
 
 async function postLabelImage(payload) {
@@ -1672,25 +1753,32 @@ async function postLabelImage(payload) {
 
 async function captureTrigger(cam, rec, triggerY) {
   const viewingCam = selectedCamera();
+  const labelWasVisible = rec.labelMesh?.visible ?? false;
+  // OCR must keep working even when the viewer's LABELS toggle is off.
+  if (rec.labelMesh) rec.labelMesh.visible = true;
   let payload = null;
   try {
-    renderPipFor(cam);
-    // renderPipFor() configures demoCam; the plain config camera has no matrices.
-    const center = projectToPixels(labelFacePoint(rec), demoCam);
-    const size = projectedBoxSize(rec, demoCam);
-    if (center.behind || size.w <= 0 || size.h <= 0) return;
+    renderPipFor(cam); // also configures demoCam for this camera
+    const roi = projectedLabelRoi(rec, demoCam);
+    if (!roi) return false;
 
-    const cropW = Math.round(THREE.MathUtils.clamp(size.w * 0.85, 64, pipCanvas.width));
-    const cropH = Math.round(THREE.MathUtils.clamp(size.h * 0.85, 48, pipCanvas.height));
-    const sx = Math.round(THREE.MathUtils.clamp(center.x - cropW / 2, 0, pipCanvas.width - cropW));
-    const sy = Math.round(THREE.MathUtils.clamp(center.y - cropH / 2, 0, pipCanvas.height - cropH));
+    fullFrameCanvas.width = pipCanvas.width;
+    fullFrameCanvas.height = pipCanvas.height;
+    fullFrameCtx.drawImage(pipCanvas, 0, 0);
+    const frame = fullFrameCtx.getImageData(0, 0, pipCanvas.width, pipCanvas.height);
+    const detected = detectLabelBBox(frame, roi);
+    if (!detected) return false;
 
-    cropCanvas.width = cropW;
-    cropCanvas.height = cropH;
-    cropCtx.drawImage(pipCanvas, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
+    cropCanvas.width = detected.w;
+    cropCanvas.height = detected.h;
+    cropCtx.drawImage(
+      pipCanvas,
+      detected.x, detected.y, detected.w, detected.h,
+      0, 0, detected.w, detected.h,
+    );
     const dataUrl = cropCanvas.toDataURL('image/jpeg', 0.86);
     const imageB64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
-    if (!imageB64) return;
+    if (!imageB64) return false;
 
     payload = {
       stamp_sec: performance.now() / 1000,
@@ -1700,14 +1788,19 @@ async function captureTrigger(cam, rec, triggerY) {
       trigger_offset: Number(cam.trigger_offset) || 0,
       trigger_y: triggerY,
       image_encoding: 'jpeg',
-      image_width: cropW,
-      image_height: cropH,
+      image_width: detected.w,
+      image_height: detected.h,
       image_b64: imageB64,
     };
   } finally {
+    if (rec.labelMesh) rec.labelMesh.visible = labelWasVisible;
     if (pipMode === 'live') renderPipFor(viewingCam);
   }
-  if (payload && await postLabelImage(payload)) setLatestLabelImage(payload);
+  if (payload && await postLabelImage(payload)) {
+    setLatestLabelImage(payload);
+    return true;
+  }
+  return false;
 }
 
 function boxTriggerY(rec, anchor, offset) {
@@ -1743,7 +1836,10 @@ function checkTriggerCaptures() {
         || labelPixel.y < 0 || labelPixel.y > pipCanvas.height) continue;
 
       capturedTriggers.add(key);
-      void captureTrigger(cam, rec, triggerY);
+      // Retry on the next frame if no label pixels were found yet.
+      void captureTrigger(cam, rec, triggerY).then((ok) => {
+        if (!ok) capturedTriggers.delete(key);
+      });
     }
   }
 }

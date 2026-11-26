@@ -97,8 +97,9 @@ generation.
 anything else becomes `off`. `trigger_offset` is metres along **+Y** from that
 box reference point. The browser captures when that point first enters the
 camera's frustum, so an exact +Y SIDE view waits until the box is visible
-instead of firing at the camera's own Y plane. It POSTs only the cropped label
-image to `POST /label_image`. The bridge caches it in `GET /label_image/latest` and
+instead of firing at the camera's own Y plane. It detects the near-white label
+pixels inside the projected label plane and POSTs only that detected crop to
+`POST /label_image`. The bridge caches it in `GET /label_image/latest` and
 publishes it as `LabelImage` on `/conveyor/label_image`; `trigger_y` is the box
 reference point's world Y at capture and `stamp_sec` is browser capture time.
 The full PiP view is web-only and never enters that topic. The separate
